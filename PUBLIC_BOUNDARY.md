@@ -28,6 +28,8 @@ The public manifest ID is `writex`. The pre-public compatibility ID was `obsidia
 
 On the first `writex` start, the plugin imports `obsidian-agent/data.json` only when the new plugin has no data file of its own. It writes the migrated copy to the new plugin directory and never deletes or rewrites the legacy source. Vault-global SecretStorage IDs and the legacy workspace view type remain unchanged. If both plugin IDs are enabled, the new plugin refuses to load and instructs the user to disable the legacy plugin first.
 
+Obsidian command IDs include the plugin ID. Custom hotkeys assigned to the legacy plugin therefore do not migrate automatically and must be rebound after the ID change. The current acceptance Vault has no such custom hotkeys; this does not prove the absence of hotkeys in other Vaults.
+
 ## Open and closed product surfaces
 
 The plugin source is licensed under AGPL-3.0-only. It remains useful with local Agents, local preview/copy, downloaded themes, and a user-owned self-hosted Relay that always consumes 0 WriteX credits.

@@ -25,6 +25,7 @@ Then inspect the minified production `main.js`, but do not commit it to the sour
 2. Keep `package.json`, `manifest.json`, `versions.json`, changelog, and tag version aligned.
 3. Use a semantic version in `x.y.z` format.
 4. Confirm `minAppVersion` matches the corresponding `versions.json` entry.
+5. Confirm the migration notes tell legacy users to rebind any custom hotkeys; command IDs are not migrated with `data.json` or SecretStorage.
 
 ## Release assets
 
