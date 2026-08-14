@@ -1,0 +1,9 @@
+{
+  "id": "obsidian-agent",
+  "name": "WriteX",
+  "version": "0.5.2",
+  "minAppVersion": "1.8.7",
+  "description": "Strengthen original writing with Codex, Claude, or WorkBuddy, preview WeChat layouts, and sync drafts from the active note.",
+  "author": "Pakco",
+  "isDesktopOnly": true
+}

@@ -1,0 +1,23 @@
+{
+  "name": "obsidian-agent",
+  "version": "0.5.2",
+  "private": true,
+  "description": "Strengthen original writing with user-owned Agents, WeChat preview, and explicit draft sync from Obsidian.",
+  "license": "AGPL-3.0-only",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.config.mjs --watch",
+    "build": "tsc --noEmit && node esbuild.config.mjs production",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "check": "npm test && npm run build && npm run check:public",
+    "check:public": "node scripts/check-public-boundary.mjs",
+    "verify:theme-release": "node --experimental-strip-types scripts/verify-theme-release.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "esbuild": "^0.28.1",
+    "obsidian": "^1.8.7",
+    "typescript": "^5.9.3"
+  }
+}

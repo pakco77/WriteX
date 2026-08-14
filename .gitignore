@@ -1,0 +1,27 @@
+# Dependencies and local tooling
+node_modules/
+.DS_Store
+*.log
+coverage/
+
+# Build output belongs in GitHub Releases, not the source tree
+main.js
+*.map
+
+# Obsidian and WriteX runtime/user data
+.obsidian/
+.writex/
+data.json
+backups/
+.env
+.env.*
+!.env.example
+
+# Cross-repository and private acceptance tests stay in the private workspace.
+# Public unit/contract tests remain under tests/ and run with npm test.
+tests/cloudE2E.test.ts
+tests/relayE2E.test.ts
+tests/realArticleCopyPlan.test.ts
+tests/themeCatalogScript.test.ts
+tests/themePacks.test.ts
+
