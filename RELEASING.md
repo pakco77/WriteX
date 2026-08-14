@@ -21,7 +21,7 @@ Then inspect the minified production `main.js`, but do not commit it to the sour
 
 ## Version gate
 
-1. Before an Obsidian directory submission, replace the incompatible legacy ID `obsidian-agent` only through the separately tested `writex` data/SecretStorage migration path.
+1. Confirm the manifest/package ID is `writex`, then run the legacy `obsidian-agent` data/SecretStorage migration tests and an isolated old-install upgrade rehearsal.
 2. Keep `package.json`, `manifest.json`, `versions.json`, changelog, and tag version aligned.
 3. Use a semantic version in `x.y.z` format.
 4. Confirm `minAppVersion` matches the corresponding `versions.json` entry.

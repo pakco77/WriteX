@@ -18,7 +18,7 @@
 
 ## 30 秒开始
 
-WriteX 已安装后：
+WriteX 需要 Obsidian 1.11.4 或更高版本。安装后：
 
 1. 打开一篇 Obsidian 笔记。
 2. 从右侧栏打开 WriteX。
@@ -138,7 +138,7 @@ WriteX 已安装后：
 2. 放入：
 
    ```text
-   <你的 Vault>/.obsidian/plugins/obsidian-agent/
+   <你的 Vault>/.obsidian/plugins/writex/
    ```
 
 3. 在 `Obsidian → 设置 → 第三方插件` 中启用 WriteX。
@@ -155,6 +155,6 @@ npm run check
 
 ## 当前版本
 
-`v0.5.2` 是首次公开的插件源码版本。公开快照已经通过完整测试、独立安装构建和秘密扫描；可下载安装的 GitHub Release 仍是单独发布步骤。Obsidian 社区提交还需要把旧兼容 ID `obsidian-agent` 迁移为合规的新 ID，并验证现有 `data.json` 与 SecretStorage 不丢失。源码公开不等于已经进入 Obsidian 社区目录。
+`v0.5.3` 是插件 ID 迁移候选。新 ID 为 `writex`；首次启用前必须先停用旧 `obsidian-agent`。如果新目录还没有自己的 `data.json`，WriteX 会复制旧数据并保留旧文件不动；既有 SecretStorage 键与侧栏视图类型保持兼容。可下载安装的 GitHub Release 仍是单独发布步骤，源码公开不等于已经进入 Obsidian 社区目录。
 
 可安装主题包及其来源、作者和许可证：<https://github.com/pakco77/writex-theme-packs>。

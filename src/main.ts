@@ -26,6 +26,7 @@ import { createCloudClient, createRelayClient, openWeChatSync as showWeChatSync,
 import { normalizeRelayUrl, type WriteRelayClient } from "./writeRelay";
 import { canReuseRelayAccountBinding, wechatImageCacheKey } from "./wechatImageCache";
 import { installLocalSkill, VaultSkillIndex, type LocalSkill, type SkillPathStatus } from "./skills";
+import { CURRENT_PLUGIN_ID, isLegacyPluginEnabled, readInitialPluginData } from "./pluginMigration";
 import { THEME_CATALOG } from "./themeCatalog";
 import { ThemeInstaller } from "./themeInstaller";
 import { ThemeService } from "./themeService";
@@ -63,6 +64,7 @@ import {
   type WeChatImageCacheEntry,
 } from "./types";
 
+// Compatibility keys are vault-global SecretStorage IDs. Do not rename them with the public plugin ID.
 const IMAGE_KEY_ID = "obsidian-agent-openai-image-key";
 const RELAY_KEY_ID = "write-wechat-relay-key";
 const CLOUD_TOKEN_ID = "writex-cloud-access-token";
@@ -105,6 +107,7 @@ export default class ObsidianAgentPlugin extends Plugin {
   private verifiedRelayUrls = new Set<string>();
 
   override async onload(): Promise<void> {
+    await this.requireSafePluginIdMigration();
     await this.loadState();
     this.skillIndex = new VaultSkillIndex(this.getVaultBasePath());
     const themeStore = new ThemeStore(this.getVaultBasePath());
@@ -163,6 +166,16 @@ export default class ObsidianAgentPlugin extends Plugin {
 
   override onunload(): void {
     this.chatRuntime.stop();
+  }
+
+  private async requireSafePluginIdMigration(): Promise<void> {
+    if (this.manifest.id !== CURRENT_PLUGIN_ID) {
+      throw new Error(`WriteX ${this.manifest.version} 必须安装在 ${CURRENT_PLUGIN_ID} 目录，当前 ID 为 ${this.manifest.id}。`);
+    }
+    if (!await isLegacyPluginEnabled(this.app.vault.adapter, this.app.vault.configDir)) return;
+    const message = "检测到旧版 WriteX（obsidian-agent）仍处于启用状态。请先在第三方插件中停用旧版，再启用新版 WriteX；旧数据不会被删除。";
+    new Notice(message, 15_000);
+    throw new Error(message);
   }
 
   async activateView(context?: SelectionContext): Promise<AgentView | null> {
@@ -797,7 +810,12 @@ export default class ObsidianAgentPlugin extends Plugin {
   }
 
   private async loadState(): Promise<void> {
-    this.data = migratePersistedData(await this.loadData());
+    const initial = await readInitialPluginData(
+      await this.loadData(),
+      this.app.vault.adapter,
+      this.app.vault.configDir,
+    );
+    this.data = migratePersistedData(initial.data);
     this.data.settings.hasImageApiKey = Boolean(await this.getImageApiKey());
     this.data.settings.hasRelayKey = Boolean(await this.getRelayKey());
     this.data.settings.hasCloudToken = Boolean(await this.getCloudToken());
@@ -808,7 +826,10 @@ export default class ObsidianAgentPlugin extends Plugin {
         return file instanceof TFile ? { name: file.name } : null;
       }) || pairedAssetsChanged;
     }
-    if (pairedAssetsChanged) await this.persist();
+    if (pairedAssetsChanged || initial.source === "legacy") await this.persist();
+    if (initial.source === "legacy") {
+      new Notice("WriteX 已把旧版数据复制到新插件目录；旧版 data.json 保留未动，可用于回滚。", 10_000);
+    }
   }
 
   private async storeImage(

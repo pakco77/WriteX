@@ -22,11 +22,11 @@ This directory is the public repository root for the WriteX Obsidian plugin. The
 
 The ignore rules in `.gitignore` enforce the file-level exclusions inside this directory. A release must still run the boundary and secret checks in `RELEASING.md`; ignore rules are not a security control by themselves.
 
-## Obsidian submission blocker
+## Legacy plugin migration
 
-The compatibility manifest ID is currently `obsidian-agent`. Obsidian's current submission rules do not allow a plugin ID containing `obsidian`. This does not block publishing source on GitHub, but it blocks submission to the Community directory.
+The public manifest ID is `writex`. The pre-public compatibility ID was `obsidian-agent`, which Obsidian treats as a different plugin.
 
-Do not change the ID in place without a tested migration. Obsidian would treat `writex` as a different plugin, so the migration must preserve or explicitly transfer the existing plugin's `data.json`, SecretStorage entries, folder state, and enablement expectations. The public ID decision and installed-data migration require a separate test-first release step.
+On the first `writex` start, the plugin imports `obsidian-agent/data.json` only when the new plugin has no data file of its own. It writes the migrated copy to the new plugin directory and never deletes or rewrites the legacy source. Vault-global SecretStorage IDs and the legacy workspace view type remain unchanged. If both plugin IDs are enabled, the new plugin refuses to load and instructs the user to disable the legacy plugin first.
 
 ## Open and closed product surfaces
 

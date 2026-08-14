@@ -2,6 +2,15 @@
 
 All notable public changes to WriteX are documented here.
 
+## 0.5.3 - 2026-08-15
+
+- Changed the public Obsidian plugin ID and package name to `writex`.
+- Added a one-time, copy-only migration from `obsidian-agent/data.json` when the new plugin has no data of its own.
+- Preserved every established SecretStorage key and the legacy view type so credentials and workspace layout remain continuous.
+- Refused to load the new plugin while the legacy plugin remains enabled, preventing two WriteX runtimes from owning the same views and data flow.
+- Kept the legacy plugin directory and data untouched for recovery; no automatic deletion or enablement-file rewrite occurs.
+- Raised the minimum Obsidian version to `1.11.4`, the first version that exposes the SecretStorage API used during startup.
+
 ## 0.5.2 - 2026-08-15
 
 - Added a resumable anonymous Write Cloud test route with a one-time 8-credit grant after the first eligible Official Account verification.
@@ -35,4 +44,3 @@ All notable public changes to WriteX are documented here.
 ## 0.1.0
 
 - Added the native Obsidian writing workspace, Agent Chat, image gallery, phone preview, and rich copy.
-
