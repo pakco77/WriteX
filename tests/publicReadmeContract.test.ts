@@ -12,6 +12,18 @@ test("public README leads to a real 30-second install and keeps product capabili
   assert.doesNotMatch(readme, /### 在当前笔记里用 Agent/);
   assert.doesNotMatch(readme, /### 图片和公众号排版/);
   assert.doesNotMatch(readme, /### 安全同步到草稿箱/);
+  assert.match(readme, /!\[WriteX 30 秒安装流程\]\(docs\/images\/writex-install-30s-v1\.png\)/);
+  assert.match(readme, /!\[WriteX 适用场景\]\(docs\/images\/writex-use-cases-v1\.png\)/);
+  assert.ok(readme.indexOf("writex-install-30s-v1.png") < readme.indexOf("## 它适合什么场景"));
+});
+
+test("public README infographics are real wide PNG assets", async () => {
+  for (const name of ["writex-install-30s-v1.png", "writex-use-cases-v1.png"]) {
+    const bytes = await readFile(new URL(`../docs/images/${name}`, import.meta.url));
+    assert.deepEqual([...bytes.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+    assert.ok(bytes.readUInt32BE(16) >= 1600);
+    assert.ok(bytes.readUInt32BE(20) >= 900);
+  }
 });
 
 test("WorkBuddy connection explanation lives in product settings", async () => {

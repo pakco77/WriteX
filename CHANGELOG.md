@@ -12,6 +12,7 @@ All notable public changes to WriteX are documented here.
 - Raised the minimum Obsidian version to `1.11.4`, the first version that exposes the SecretStorage API used during startup.
 - Replaced the README's usage-heavy “30-second start” with a truthful 30-second installation path and a four-line product summary.
 - Moved WorkBuddy/CodeBuddy setup guidance into the plugin's AI settings and organized repository policy documents under `.github/` and `docs/`.
+- Added wide visual guides for the three-step installation path and four creator scenarios, with collapsed text alternatives retained for accessibility and search.
 
 ## 0.5.2 - 2026-08-15
 
