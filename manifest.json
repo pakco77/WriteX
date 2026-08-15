@@ -1,7 +1,7 @@
 {
   "id": "writex",
   "name": "WriteX",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "minAppVersion": "1.11.4",
   "description": "Strengthen original writing with Codex, Claude, or WorkBuddy, preview WeChat layouts, and sync drafts from the active note.",
   "author": "Pakco",

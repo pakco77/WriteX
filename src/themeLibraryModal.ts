@@ -140,7 +140,7 @@ class ThemeCompilePreviewModal extends Modal {
     this.setTitle(`预览编译排版 · ${this.themeName}`);
     this.contentEl.createEl("p", { text: this.detail });
     const preview = this.contentEl.createDiv({ cls: "oa-theme-compile-preview" });
-    preview.innerHTML = this.html;
+    preview.appendChild(document.createRange().createContextualFragment(this.html));
     const actions = this.contentEl.createDiv({ cls: "oa-modal-actions" });
     const cancel = actions.createEl("button", { text: "不安装", attr: { type: "button" } });
     cancel.onclick = () => this.close();

@@ -1736,7 +1736,7 @@ export class AgentView extends ItemView {
       } catch (error) {
         this.previewRenderError = errorMessage(error);
       }
-      if (this.previewHtml) article.innerHTML = this.previewHtml;
+      if (this.previewHtml) article.appendChild(document.createRange().createContextualFragment(this.previewHtml));
       if (this.previewRenderError) {
         article.createDiv({ cls: "oa-skill-stale-banner", text: `排版不可用：${this.previewRenderError}。已保留上一次有效预览。` });
       }
@@ -2902,8 +2902,8 @@ export class AgentView extends ItemView {
 }
 
 function autoGrow(textarea: HTMLTextAreaElement): void {
-  textarea.style.height = "auto";
-  textarea.style.height = `${Math.min(180, Math.max(76, textarea.scrollHeight))}px`;
+  textarea.setCssProps({ height: "auto" });
+  textarea.setCssProps({ height: `${Math.min(180, Math.max(76, textarea.scrollHeight))}px` });
 }
 
 function createId(prefix: string): string {

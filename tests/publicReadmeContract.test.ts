@@ -5,14 +5,17 @@ import test from "node:test";
 test("public README leads to a real 30-second install and keeps product capabilities concise", async () => {
   const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
 
+  assert.match(readme, /## English/);
+  assert.match(readme, /WriteX is an Obsidian-native writing workspace/);
+  assert.match(readme, /create or update WeChat drafts only/);
   assert.match(readme, /## AI 强化原创/);
   assert.doesNotMatch(readme, /## 让 AI 强化原创/);
   assert.match(readme, /## 30 秒安装 WriteX/);
   assert.ok(readme.indexOf("## 30 秒安装 WriteX") < readme.indexOf("## 它适合什么场景"));
   assert.doesNotMatch(readme, /## 30 秒开始/);
-  assert.match(readme, /\[WriteX v0\.5\.3\]\(https:\/\/github\.com\/pakco77\/WriteX\/releases\/tag\/v0\.5\.3\)/);
+  assert.match(readme, /\[WriteX v0\.5\.4\]\(https:\/\/github\.com\/pakco77\/WriteX\/releases\/tag\/0\.5\.4\)/);
   assert.match(readme, /`main\.js`、`manifest\.json` 和 `styles\.css`/);
-  assert.match(readme, /社区目录尚未上架/);
+  assert.match(readme, /社区目录正在审核/);
   assert.doesNotMatch(readme, /尚未发布可下载安装包/);
   assert.doesNotMatch(readme, /使用 WorkBuddy，为什么还要装 CodeBuddy/);
   assert.doesNotMatch(readme, /### 在当前笔记里用 Agent/);

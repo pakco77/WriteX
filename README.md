@@ -1,5 +1,11 @@
 # WriteX
 
+## English
+
+WriteX is an Obsidian-native writing workspace for WeChat creators. Your Markdown note remains the source of truth while you use Codex, Claude, or WorkBuddy to develop material, generate images, preview WeChat layouts, and create or update WeChat drafts only. It never publishes or mass-sends on your behalf.
+
+## 中文
+
 ## AI 强化原创
 
 你提供经历、材料和判断，AI 帮你梳理、改写和补强。WriteX 把 Agent、图片、公众号排版和草稿同步放进当前 Obsidian 笔记旁边，但不把作者的位置让出去。
@@ -17,7 +23,7 @@
 <details>
 <summary>查看文字安装路径</summary>
 
-1. 从 [WriteX v0.5.3](https://github.com/pakco77/WriteX/releases/tag/v0.5.3) 下载 `main.js`、`manifest.json` 和 `styles.css`。
+1. 从 [WriteX v0.5.4](https://github.com/pakco77/WriteX/releases/tag/0.5.4) 下载 `main.js`、`manifest.json` 和 `styles.css`。
 2. 将三份文件放进 `<你的 Vault>/.obsidian/plugins/writex/`；从旧版 `obsidian-agent` 迁移时，保留旧目录和数据，并只启用 `writex`。
 3. 重启 Obsidian，在 `设置 → 第三方插件` 启用 WriteX，然后打开一篇笔记，从右侧栏进入。
 
@@ -25,13 +31,13 @@
 
 WriteX 需要 Obsidian 1.11.4 或更高版本。
 
-当前可用的手动安装包是 [v0.5.3 GitHub Release](https://github.com/pakco77/WriteX/releases/tag/v0.5.3)，仅含上面三份文件：
+当前可用的手动安装包是 [v0.5.4 GitHub Release](https://github.com/pakco77/WriteX/releases/tag/0.5.4)，仅含上面三份文件：
 
 ```text
 <你的 Vault>/.obsidian/plugins/writex/
 ```
 
-然后在第三方插件中启用 WriteX。社区目录尚未上架；上方图片展示的是上架后的未来路径，不是当前可点击入口。
+然后在第三方插件中启用 WriteX。社区目录正在审核；审核通过并公开前，上方图片展示的是未来的目录入口，不是当前可点击入口。
 
 ## 它适合什么场景
 

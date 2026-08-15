@@ -2,6 +2,11 @@
 
 All notable public changes to WriteX are documented here.
 
+## 0.5.4 - 2026-08-15
+
+- Replaced directory-review-incompatible settings heading, HTML insertion, and textarea sizing shortcuts with Obsidian-supported UI APIs.
+- Added an English README overview that states the native-note, Agent, and WeChat-drafts-only boundaries.
+
 ## 0.5.3 - 2026-08-15
 
 - Changed the public Obsidian plugin ID and package name to `writex`.

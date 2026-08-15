@@ -916,7 +916,7 @@ class AgentSettingTab extends PluginSettingTab {
   override display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "WriteX" });
+    new Setting(containerEl).setName("WriteX").setHeading();
     containerEl.createEl("p", {
       cls: "setting-item-description",
       text: "Chat 使用你选择的 Agent 账号额度，WriteX 积分为 0。未连接的 Agent 不会静默回退；生图仍优先使用 Codex，OpenAI 图片 API Key 只作为你明确选择的备用路径。",

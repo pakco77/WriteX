@@ -1,6 +1,6 @@
 {
   "name": "writex",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "private": true,
   "description": "Strengthen original writing with user-owned Agents, WeChat preview, and explicit draft sync from Obsidian.",
   "license": "AGPL-3.0-only",
