@@ -33,7 +33,7 @@ export function encodeRelayFileName(value: string): string {
 
 export interface RelayTransportRequest {
   url: string;
-  method: "GET" | "POST" | "PUT";
+  method: "GET" | "POST" | "PUT" | "DELETE";
   headers?: Record<string, string>;
   body?: string | ArrayBuffer;
 }

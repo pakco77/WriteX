@@ -44,6 +44,11 @@ export interface CloudConnection {
   balance?: number;
 }
 
+export interface CloudCredentialRevocation {
+  revokedSessions: number;
+  revokedInstallations?: number;
+}
+
 export interface CloudQuote {
   id: string;
   connectionId: string;
@@ -225,6 +230,29 @@ export class WriteCloudClient {
     };
   }
 
+  async deleteConnection(connectionId: string): Promise<{ connectionId: string; erasedSecret: true }> {
+    const value = await this.send("DELETE", `/v1/connections/${encodeURIComponent(id(connectionId, "公众号连接 ID"))}`);
+    if (value.erasedSecret !== true) throw new Error("Write Cloud 删除连接响应格式无效。");
+    return { connectionId: id(value.connectionId, "公众号连接 ID"), erasedSecret: true };
+  }
+
+  async revokeCurrentSessions(): Promise<CloudCredentialRevocation> {
+    const value = await this.send("DELETE", "/v1/me/sessions");
+    if (!Number.isInteger(value.revokedSessions)) throw new Error("Write Cloud 会话撤销响应格式无效。");
+    return { revokedSessions: value.revokedSessions as number };
+  }
+
+  async revokeCurrentInstallation(installationToken: string): Promise<CloudCredentialRevocation> {
+    if (!installationToken.trim()) throw new Error("安装凭证不能为空。");
+    const value = await this.send("DELETE", "/v1/me/installations/current", true, {
+      "Content-Type": "application/json; charset=utf-8",
+    }, JSON.stringify({ installationToken: installationToken.trim() }));
+    if (!Number.isInteger(value.revokedSessions) || !Number.isInteger(value.revokedInstallations)) {
+      throw new Error("Write Cloud 设备撤销响应格式无效。");
+    }
+    return { revokedSessions: value.revokedSessions as number, revokedInstallations: value.revokedInstallations as number };
+  }
+
   async createQuote(
     connectionId: string,
     operation: "create" | "update",
@@ -347,7 +375,7 @@ export class WriteCloudClient {
   }
 
   private async send(
-    method: "GET" | "POST" | "PUT",
+    method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     authenticated = true,
     headers: Record<string, string> = {},

@@ -7,6 +7,7 @@ import {
   type AgentSettings,
   type PersistedData,
 } from "../src/types.ts";
+import { readFile } from "node:fs/promises";
 
 test("v0.1 settings migrate without losing existing values", () => {
   const legacy = {
@@ -60,6 +61,14 @@ test("v0.5 defaults to self-hosted Relay and persists no cloud token, invite, or
   assert.equal("cloudToken" in settings, false);
   assert.equal("inviteCode" in settings, false);
   assert.equal("appsecret" in settings, false);
+});
+
+test("Cloud lifecycle UI distinguishes local disconnect from server-side revocation and secret deletion", async () => {
+  const main = await readFile(new URL("../src/main.ts", import.meta.url), "utf8");
+  assert.match(main, /clearCloudCredentials/);
+  assert.match(main, /revokeCurrentInstallation/);
+  assert.match(main, /deleteConnection/);
+  assert.match(main, /进行中的同步或待人工核查结果/);
 });
 
 test("invalid persisted Agent and removed Luna model fall back visibly to Codex default", () => {

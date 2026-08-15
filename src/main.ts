@@ -790,6 +790,16 @@ export default class ObsidianAgentPlugin extends Plugin {
     await this.persist();
   }
 
+  async clearCloudCredentials(): Promise<void> {
+    await this.app.secretStorage.setSecret(CLOUD_TOKEN_ID, "");
+    await this.app.secretStorage.setSecret(CLOUD_INSTALLATION_TOKEN_ID, "");
+    this.data.settings.hasCloudToken = false;
+    this.data.settings.cloudConnectionId = "";
+    this.data.settings.cloudAccountName = "";
+    this.data.settings.cloudAccountId = "";
+    await this.persist();
+  }
+
   async getOrCreateCloudInstallationToken(): Promise<string> {
     const existing = (await this.app.secretStorage.getSecret(CLOUD_INSTALLATION_TOKEN_ID))?.trim();
     if (existing) return existing;
@@ -1140,7 +1150,7 @@ class AgentSettingTab extends PluginSettingTab {
         }))
         .addExtraButton(button => button.setIcon("log-out").setTooltip("断开 Write Cloud").onClick(async () => {
           await this.plugin.setCloudToken("");
-          new Notice("Write Cloud 设备令牌已清除。");
+          new Notice("本机 Write Cloud 会话已断开；匿名安装凭证仍保留，稍后可恢复同一体验账户。");
           this.display();
         }));
 
@@ -1157,6 +1167,24 @@ class AgentSettingTab extends PluginSettingTab {
               new Notice(errorMessage(error));
             } finally {
               button.setDisabled(false).setButtonText("刷新余额");
+            }
+          }));
+        new Setting(cloudSettings)
+          .setName("撤销当前设备")
+          .setDesc("撤销服务端当前安装凭证和该体验账户全部设备会话，并清除本机凭证。此设备不能再恢复同一体验账户；不会删除已产生的草稿记录。")
+          .addButton(button => button.setButtonText("撤销并清除").setWarning().onClick(async () => {
+            if (!window.confirm("撤销后，当前设备和同一体验账户的全部会话都会失效；本机匿名安装凭证也会清除。继续吗？")) return;
+            button.setDisabled(true).setButtonText("撤销中…");
+            try {
+              const installationToken = await this.plugin.getOrCreateCloudInstallationToken();
+              await (await createCloudClient(this.plugin)).revokeCurrentInstallation(installationToken);
+              await this.plugin.clearCloudCredentials();
+              new Notice("当前设备与全部体验会话已撤销，本机凭证已清除。");
+              this.display();
+            } catch (error) {
+              new Notice(errorMessage(error));
+            } finally {
+              button.setDisabled(false).setButtonText("撤销并清除");
             }
           }));
         new Setting(accountSettings)
@@ -1212,6 +1240,29 @@ class AgentSettingTab extends PluginSettingTab {
               button.setDisabled(false).setButtonText("保存到 Write Cloud 并验证");
             }
           }));
+        if (this.plugin.agentSettings.cloudConnectionId) {
+          new Setting(accountSettings)
+            .setName("删除云端公众号连接")
+            .setDesc("会从 Write Cloud 删除该连接并擦除加密保存的 AppSecret。若存在进行中的同步或待人工核查结果，会拒绝删除以避免丢失处理依据。")
+            .addButton(button => button.setButtonText("删除连接与 AppSecret").setWarning().onClick(async () => {
+              const accountName = this.plugin.agentSettings.cloudAccountName || "当前公众号";
+              if (!window.confirm(`删除“${accountName}”的 Write Cloud 连接及 AppSecret？已完成的草稿记录不会删除。`)) return;
+              button.setDisabled(true).setButtonText("删除中…");
+              try {
+                await (await createCloudClient(this.plugin)).deleteConnection(this.plugin.agentSettings.cloudConnectionId);
+                this.plugin.agentSettings.cloudConnectionId = "";
+                this.plugin.agentSettings.cloudAccountName = "";
+                this.plugin.agentSettings.cloudAccountId = "";
+                await this.plugin.persist();
+                new Notice("云端公众号连接与 AppSecret 已删除。");
+                this.display();
+              } catch (error) {
+                new Notice(errorMessage(error));
+              } finally {
+                button.setDisabled(false).setButtonText("删除连接与 AppSecret");
+              }
+            }));
+        }
       }
     }
     const otherSettings = this.createSettingsGroup(containerEl, "其它");

@@ -105,3 +105,18 @@ test("a confirmed job can be explicitly cancelled without adding a payment path"
   assert.equal(request?.method, "POST");
   assert.match(request?.url ?? "", /\/v1\/jobs\/job-1\/cancel$/);
 });
+
+test("cloud credential lifecycle uses explicit destructive endpoints and never sends the token in a URL", async () => {
+  const requests: CloudTransportRequest[] = [];
+  const client = new WriteCloudClient("https://cloud.writex.example", "device-token", async request => {
+    requests.push(request);
+    return { status: 200, json: { ok: true, connectionId: "con-1", erasedSecret: true, revokedSessions: 1, revokedInstallations: 1 } };
+  });
+  await client.deleteConnection("con-1");
+  await client.revokeCurrentInstallation("installation-token");
+  assert.deepEqual(requests.map(request => request.method), ["DELETE", "DELETE"]);
+  assert.match(requests[0]?.url ?? "", /\/v1\/connections\/con-1$/);
+  assert.match(requests[1]?.url ?? "", /\/v1\/me\/installations\/current$/);
+  assert.equal(requests.some(request => request.url.includes("device-token")), false);
+  assert.equal(requests.every(request => request.headers?.Authorization === "Bearer device-token"), true);
+});

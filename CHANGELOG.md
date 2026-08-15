@@ -9,6 +9,7 @@ All notable public changes to WriteX are documented here.
 - Preserved every established SecretStorage key and the legacy view type so credentials and workspace layout remain continuous.
 - Refused to load the new plugin while the legacy plugin remains enabled, preventing two WriteX runtimes from owning the same views and data flow.
 - Kept the legacy plugin directory and data untouched for recovery; no automatic deletion or enablement-file rewrite occurs.
+- Added explicit Cloud credential-lifecycle controls: recoverable local disconnect, service-side current-device revocation, and connection/AppSecret deletion with clear destructive confirmation and no credential in a URL.
 - Raised the minimum Obsidian version to `1.11.4`, the first version that exposes the SecretStorage API used during startup.
 - Replaced the README's usage-heavy “30-second start” with a truthful 30-second installation path and a four-line product summary.
 - Moved WorkBuddy/CodeBuddy setup guidance into the plugin's AI settings and organized repository policy documents under `.github/` and `docs/`.
