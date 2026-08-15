@@ -17,21 +17,21 @@
 <details>
 <summary>查看文字安装路径</summary>
 
-1. 打开 `Obsidian → 设置 → 第三方插件 → 浏览`。
-2. 搜索 `WriteX`，点击“安装”，然后“启用”。
-3. 打开一篇笔记，从右侧栏进入 WriteX。
+1. 从 [WriteX v0.5.3](https://github.com/pakco77/WriteX/releases/tag/v0.5.3) 下载 `main.js`、`manifest.json` 和 `styles.css`。
+2. 将三份文件放进 `<你的 Vault>/.obsidian/plugins/writex/`；从旧版 `obsidian-agent` 迁移时，保留旧目录和数据，并只启用 `writex`。
+3. 重启 Obsidian，在 `设置 → 第三方插件` 启用 WriteX，然后打开一篇笔记，从右侧栏进入。
 
 </details>
 
 WriteX 需要 Obsidian 1.11.4 或更高版本。
 
-当前 `v0.5.3` 仍是源码候选，尚未发布可下载安装包。首个 GitHub Release 发布后，测试用户也可以把同一版本的 `main.js`、`manifest.json` 和 `styles.css` 放进：
+当前可用的手动安装包是 [v0.5.3 GitHub Release](https://github.com/pakco77/WriteX/releases/tag/v0.5.3)，仅含上面三份文件：
 
 ```text
 <你的 Vault>/.obsidian/plugins/writex/
 ```
 
-然后在第三方插件中启用 WriteX。源码公开不等于已经上架。
+然后在第三方插件中启用 WriteX。社区目录尚未上架；上方图片展示的是上架后的未来路径，不是当前可点击入口。
 
 ## 它适合什么场景
 
@@ -79,7 +79,7 @@ WriteX 需要 Obsidian 1.11.4 或更高版本。
 - Agent CLI、主题下载、用户选择的图片 API、自建 Relay 和 Write Cloud 会分别联网，并遵循各自的服务条款。
 - Write Cloud 是可选的闭源托管服务；开源插件、本地 Agent、预览复制和自建 Relay 不依赖它。
 - 当前没有支付、订阅、充值、正式发布、群发、定时发布、自动同步、数据分析、团队或多渠道分发。
-- Write Cloud 仍处于受控体验阶段，尚未提供自助删除连接/AppSecret 和撤销安装/会话的完整能力。
+- Write Cloud 仍处于受控体验阶段。它提供当前设备撤销以及连接/AppSecret 删除；完整的设备/会话清单与管理能力尚未提供，且每一项破坏性操作都需要单独确认。
 
 更完整的边界见 [隐私说明](docs/PRIVACY.md)和[公开仓库边界](docs/PUBLIC_BOUNDARY.md)。
 

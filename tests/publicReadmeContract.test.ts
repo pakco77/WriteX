@@ -10,6 +10,10 @@ test("public README leads to a real 30-second install and keeps product capabili
   assert.match(readme, /## 30 秒安装 WriteX/);
   assert.ok(readme.indexOf("## 30 秒安装 WriteX") < readme.indexOf("## 它适合什么场景"));
   assert.doesNotMatch(readme, /## 30 秒开始/);
+  assert.match(readme, /\[WriteX v0\.5\.3\]\(https:\/\/github\.com\/pakco77\/WriteX\/releases\/tag\/v0\.5\.3\)/);
+  assert.match(readme, /`main\.js`、`manifest\.json` 和 `styles\.css`/);
+  assert.match(readme, /社区目录尚未上架/);
+  assert.doesNotMatch(readme, /尚未发布可下载安装包/);
   assert.doesNotMatch(readme, /使用 WorkBuddy，为什么还要装 CodeBuddy/);
   assert.doesNotMatch(readme, /### 在当前笔记里用 Agent/);
   assert.doesNotMatch(readme, /### 图片和公众号排版/);
