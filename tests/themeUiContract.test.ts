@@ -17,7 +17,7 @@ test("WriteX settings are grouped into collapsed sections and empty reserved sec
   assert.match(groupHelper, /createEl\("summary"/);
   assert.doesNotMatch(groupHelper, /open/);
   assert.match(settings, /if \(!otherSettings\.childElementCount\) otherSettings\.parentElement\?\.remove\(\)/);
-  assert.match(settings, /new Setting\(containerEl\)\.setName\("WriteX"\)\.setHeading\(\);/);
+  assert.doesNotMatch(settings, /setName\("WriteX"\)\.setHeading\(\);/);
   assert.doesNotMatch(settings, /createEl\("h2", \{ text: "WriteX" \}\)/);
   assert.doesNotMatch(settings, /createEl\("h3", \{ text: "微信公众号草稿同步" \}\)/);
   assert.match(styles, /\.oa-settings-group/);
@@ -64,7 +64,7 @@ test("preview subscribes to theme changes and preserves the last valid HTML", as
   assert.match(view, /private previewRenderError = ""/);
   assert.match(view, /this\.previewHtml = rendered\.html/);
   assert.match(view, /catch \(error\)[\s\S]*this\.previewRenderError = errorMessage\(error\)/);
-  assert.match(view, /article\.appendChild\(document\.createRange\(\)\.createContextualFragment\(this\.previewHtml\)\)/);
+  assert.match(view, /article\.appendChild\(sanitizeHTMLToDom\(this\.previewHtml\)\)/);
   assert.doesNotMatch(view, /article\.innerHTML/);
 });
 
@@ -74,8 +74,8 @@ test("directory-review UI rules use Obsidian helpers instead of forbidden DOM sh
     readFile(new URL("../src/view.ts", import.meta.url), "utf8"),
   ]);
 
-  assert.match(themeLibrary, /preview\.appendChild\(document\.createRange\(\)\.createContextualFragment\(this\.html\)\)/);
-  assert.doesNotMatch(themeLibrary, /preview\.innerHTML/);
+  assert.match(themeLibrary, /preview\.appendChild\(sanitizeHTMLToDom\(this\.html\)\)/);
+  assert.doesNotMatch(themeLibrary, /innerHTML|createContextualFragment/);
   assert.doesNotMatch(view, /textarea\.style\.height/);
   assert.match(view, /textarea\.setCssProps\(\{ height: "auto" \}\)/);
   assert.match(view, /textarea\.setCssProps\(\{ height: `\$\{Math\.min\(180, Math\.max\(76, textarea\.scrollHeight\)\)\}px` \}\)/);
@@ -420,15 +420,15 @@ test("WriteX branding changes user-facing copy but preserves compatibility ident
   ]);
   const metadata = JSON.parse(manifest);
   const lock = JSON.parse(packageLock);
-  assert.deepEqual([metadata.id, metadata.name, metadata.version], ["writex", "WriteX", "0.5.4"]);
+  assert.deepEqual([metadata.id, metadata.name, metadata.version], ["writex", "WriteX", "0.5.5"]);
   assert.equal(metadata.minAppVersion, "1.11.4");
-  assert.equal(JSON.parse(versions)["0.5.4"], "1.11.4");
+  assert.equal(JSON.parse(versions)["0.5.5"], "1.11.4");
   assert.equal(JSON.parse(pkg).name, "writex");
-  assert.equal(JSON.parse(pkg).version, "0.5.4");
+  assert.equal(JSON.parse(pkg).version, "0.5.5");
   assert.equal(lock.name, "writex");
-  assert.equal(lock.version, "0.5.4");
+  assert.equal(lock.version, "0.5.5");
   assert.equal(lock.packages[""].name, "writex");
-  assert.equal(lock.packages[""].version, "0.5.4");
+  assert.equal(lock.packages[""].version, "0.5.5");
   assert.match(view, /aria-label": "WriteX"/);
   const brand = view.match(/const brand = header\.createDiv[\s\S]*?const actions =/)?.[0] ?? "";
   assert.match(brand, /createSpan\(\{ text: "Write" \}\)/);

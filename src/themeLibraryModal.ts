@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { App, FuzzySuggestModal, Modal, Notice, TFile } from "obsidian";
+import { App, FuzzySuggestModal, Modal, Notice, sanitizeHTMLToDom, TFile } from "obsidian";
 import type ObsidianAgentPlugin from "./main";
 import { AGENT_LABELS, configuredAgentModel } from "./chatAgents.ts";
 import {
@@ -140,7 +140,7 @@ class ThemeCompilePreviewModal extends Modal {
     this.setTitle(`预览编译排版 · ${this.themeName}`);
     this.contentEl.createEl("p", { text: this.detail });
     const preview = this.contentEl.createDiv({ cls: "oa-theme-compile-preview" });
-    preview.appendChild(document.createRange().createContextualFragment(this.html));
+    preview.appendChild(sanitizeHTMLToDom(this.html));
     const actions = this.contentEl.createDiv({ cls: "oa-modal-actions" });
     const cancel = actions.createEl("button", { text: "不安装", attr: { type: "button" } });
     cancel.onclick = () => this.close();

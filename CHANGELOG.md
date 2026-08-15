@@ -2,6 +2,10 @@
 
 All notable public changes to WriteX are documented here.
 
+## 0.5.5 - 2026-08-15
+
+- Removed the redundant plugin-name settings heading and use Obsidian's HTML sanitizer before appending validated theme previews.
+
 ## 0.5.4 - 2026-08-15
 
 - Replaced directory-review-incompatible settings heading, HTML insertion, and textarea sizing shortcuts with Obsidian-supported UI APIs.

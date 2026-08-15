@@ -6,6 +6,7 @@ import {
   Menu,
   Modal,
   Notice,
+  sanitizeHTMLToDom,
   TFile,
   WorkspaceLeaf,
   setIcon,
@@ -1736,7 +1737,7 @@ export class AgentView extends ItemView {
       } catch (error) {
         this.previewRenderError = errorMessage(error);
       }
-      if (this.previewHtml) article.appendChild(document.createRange().createContextualFragment(this.previewHtml));
+      if (this.previewHtml) article.appendChild(sanitizeHTMLToDom(this.previewHtml));
       if (this.previewRenderError) {
         article.createDiv({ cls: "oa-skill-stale-banner", text: `排版不可用：${this.previewRenderError}。已保留上一次有效预览。` });
       }
