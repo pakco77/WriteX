@@ -23,9 +23,10 @@ test("public README leads to a real 30-second install and keeps product capabili
   assert.match(readme, /选题/);
   assert.match(readme, /复制微信公众号格式/);
   assert.match(readme, /高级同步/);
-  assert.match(readme, /!\[WriteX：Obsidian 与 Chat\]\(docs\/images\/writex-chat-light-v1\.png\)/);
-  assert.match(readme, /docs\/images\/writex-gallery-light-v1\.png/);
-  assert.match(readme, /docs\/images\/writex-preview-light-v1\.png/);
+  assert.match(readme, /!\[WriteX：Obsidian \+ Chat、图片集与预览\]\(docs\/images\/writex-product-overview-v2\.png\)/);
+  assert.doesNotMatch(readme, /writex-chat-light-v1\.png/);
+  assert.doesNotMatch(readme, /writex-gallery-light-v1\.png/);
+  assert.doesNotMatch(readme, /writex-preview-light-v1\.png/);
   assert.doesNotMatch(readme, /writex-product-overview-v1\.png/);
   assert.doesNotMatch(readme, /writex-30s-demo-placeholder\.png/);
   assert.match(readme, /!\[WriteX 30 秒安装流程\]\(docs\/images\/writex-install-30s-v1\.png\)/);
@@ -35,9 +36,7 @@ test("public README leads to a real 30-second install and keeps product capabili
 
 test("public README infographics are real wide PNG assets", async () => {
   for (const name of [
-    "writex-chat-light-v1.png",
-    "writex-gallery-light-v1.png",
-    "writex-preview-light-v1.png",
+    "writex-product-overview-v2.png",
     "writex-install-30s-v1.png",
     "writex-use-cases-v1.png",
   ]) {

@@ -8,20 +8,7 @@
 
 > 只创建或更新微信公众号草稿。不会自动发布，不会群发。
 
-### Obsidian + Chat
-
-![WriteX：Obsidian 与 Chat](docs/images/writex-chat-light-v1.png)
-
-<table>
-  <tr>
-    <th width="50%">图片集</th>
-    <th width="50%">预览</th>
-  </tr>
-  <tr>
-    <td><img src="docs/images/writex-gallery-light-v1.png" alt="WriteX 图片集" /></td>
-    <td><img src="docs/images/writex-preview-light-v1.png" alt="WriteX 手机预览" /></td>
-  </tr>
-</table>
+![WriteX：Obsidian + Chat、图片集与预览](docs/images/writex-product-overview-v2.png)
 
 ## 30 秒安装 WriteX
 
