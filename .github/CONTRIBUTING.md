@@ -32,4 +32,3 @@ The public test suite contains no real Vault fixtures, account credentials, or W
 Explain the user problem, the smallest change, the trust boundary touched, and the verification performed. Separate local tests from real external behavior. A passing build is not proof of an Agent, Relay, Write Cloud, or WeChat outcome.
 
 By submitting a contribution, you confirm that you have the right to contribute it and agree to license it under this repository's AGPL-3.0-only license.
-

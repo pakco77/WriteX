@@ -954,7 +954,7 @@ class AgentSettingTab extends PluginSettingTab {
       }));
     new Setting(aiSettings)
       .setName("WorkBuddy CLI 可执行文件")
-      .setDesc("留空时检测官方 codebuddy/cbc CLI；不会调用 WorkBuddy 桌面 App 私有接口。")
+      .setDesc("WriteX 通过腾讯官方 codebuddy/cbc CLI 连接 WorkBuddy，不会读取 WorkBuddy 桌面 App 的私有登录信息。首次使用请在终端运行 npm install -g @tencent-ai/codebuddy-code，再运行 codebuddy 完成登录，回到这里点击检测。")
       .addText(text => text
         .setPlaceholder("未连接")
         .setValue(this.plugin.agentSettings.workbuddyPath)

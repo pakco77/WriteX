@@ -20,7 +20,7 @@ This directory is the public repository root for the WriteX Obsidian plugin. The
 - real-account, real-article, cross-repository, and production acceptance tests;
 - `main.js` and source maps. `main.js`, `manifest.json`, and `styles.css` are release assets; only the latter two remain tracked as source/configuration files.
 
-The ignore rules in `.gitignore` enforce the file-level exclusions inside this directory. A release must still run the boundary and secret checks in `RELEASING.md`; ignore rules are not a security control by themselves.
+The ignore rules in the repository root enforce the file-level exclusions inside this directory. A release must still run the boundary and secret checks in [`RELEASING.md`](RELEASING.md); ignore rules are not a security control by themselves.
 
 ## Legacy plugin migration
 
@@ -38,4 +38,4 @@ Write Cloud is an optional proprietary hosted service. The public plugin include
 
 ## Brand boundary
 
-The source license applies to code, not to the WriteX name, wordmark, or logo. See `TRADEMARKS.md`.
+The source license applies to code, not to the WriteX name, wordmark, or logo. See [`TRADEMARKS.md`](TRADEMARKS.md).

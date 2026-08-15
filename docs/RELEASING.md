@@ -5,10 +5,10 @@ This checklist prepares a release; it does not authorize a GitHub push or an Obs
 ## Source boundary
 
 1. Confirm the repository root is this plugin directory, not the parent private workspace.
-2. Review `PUBLIC_BOUNDARY.md` and `.gitignore`.
+2. Review `docs/PUBLIC_BOUNDARY.md` and `.gitignore`.
 3. Confirm no ignored private acceptance test or runtime file is staged.
 4. Search the candidate snapshot for credentials, private keys, bearer tokens, real account identifiers, private notes, absolute user paths, production IPs, and deployment configuration.
-5. Verify `LICENSE`, `NOTICE.md`, `TRADEMARKS.md`, `SECURITY.md`, `PRIVACY.md`, and `CONTRIBUTING.md` are present.
+5. Verify `LICENSE`, `NOTICE.md`, `docs/TRADEMARKS.md`, `.github/SECURITY.md`, `docs/PRIVACY.md`, and `.github/CONTRIBUTING.md` are present.
 
 ## Quality gate
 

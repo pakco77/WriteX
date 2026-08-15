@@ -45,5 +45,4 @@ Version `0.5.2` does not yet expose self-service deletion of the Write Cloud ins
 
 ## Publication boundary
 
-The public repository must not contain Vault notes, installed-plugin data, SecretStorage values, Agent sessions, real credentials, production databases, deployment configuration, or private acceptance evidence. See `PUBLIC_BOUNDARY.md`.
-
+The public repository must not contain Vault notes, installed-plugin data, SecretStorage values, Agent sessions, real credentials, production databases, deployment configuration, or private acceptance evidence. See [`PUBLIC_BOUNDARY.md`](PUBLIC_BOUNDARY.md).

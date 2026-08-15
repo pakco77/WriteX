@@ -29,4 +29,3 @@ Do not send a real AppSecret, Relay Key, access token, installation token, priva
 ## Disclosure process
 
 The maintainer will confirm receipt, reproduce with synthetic data, assess affected versions, and coordinate a fix and release before public discussion. No response-time or bounty commitment is made by this policy.
-
