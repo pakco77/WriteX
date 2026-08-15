@@ -13,6 +13,8 @@ All notable public changes to WriteX are documented here.
 - Replaced the README's usage-heavy “30-second start” with a truthful 30-second installation path and a four-line product summary.
 - Moved WorkBuddy/CodeBuddy setup guidance into the plugin's AI settings and organized repository policy documents under `.github/` and `docs/`.
 - Added wide visual guides for the three-step installation path and four creator scenarios, with collapsed text alternatives retained for accessibility and search.
+- Tightened the public hook to “AI 强化原创”, added a light real-UI overview of Obsidian + Chat, the image gallery and phone preview, and made the README's Agent, Skill, history, topic and WeChat delivery capabilities explicit.
+- Passed the selected Vault Skill instruction into Codex image turns instead of only recording the Skill snapshot.
 
 ## 0.5.2 - 2026-08-15
 

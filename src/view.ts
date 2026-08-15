@@ -1981,7 +1981,7 @@ export class AgentView extends ItemView {
     const model = configuredAgentModel(this.plugin.agentSettings, agent);
     const reasoningEffort = agent === "codex" ? configuredCodexReasoningEffort(this.plugin.agentSettings) : "";
     const activeSkill = findLocalSkillByPath(this.localSkills, state.activeSkillPath);
-    if (!imageRequest && state.activeSkillPath && !activeSkill) {
+    if (state.activeSkillPath && !activeSkill) {
       new Notice("当前启用的 Skill 尚未加载，请重新扫描或先停用 Skill。");
       return;
     }
@@ -2011,9 +2011,11 @@ export class AgentView extends ItemView {
       this.imageMode = false;
       this.pendingImageRequest = {
         notePath: this.notePath,
-        prompt: context?.text.trim()
-          ? `${request}\n\n文章选段参考：${context.text.trim()}`
-          : request,
+        prompt: [
+          activeSkill ? buildExplicitSkillInstruction(activeSkill) : "",
+          request,
+          context?.text.trim() ? `文章选段参考：${context.text.trim()}` : "",
+        ].filter(Boolean).join("\n\n"),
         context,
         userMessageId,
         imageSize: this.plugin.agentSettings.imageSize,

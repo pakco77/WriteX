@@ -313,16 +313,19 @@ test("Skill discovery exposes four truthful states and stale scans cannot mutate
   assert.match(view, /重新扫描/);
 });
 
-test("an explicitly selected but unresolved Skill blocks Chat before persistence instead of silently degrading", async () => {
+test("an explicitly selected Skill blocks unresolved text or image turns and reaches image generation", async () => {
   const view = await readFile(new URL("../src/view.ts", import.meta.url), "utf8");
   const send = view.match(/private async sendMessage\([\s\S]*?private async runPendingImageWithAgent/)?.[0] ?? "";
-  assert.match(send, /!imageRequest && state\.activeSkillPath && !activeSkill/);
+  assert.match(send, /state\.activeSkillPath && !activeSkill/);
+  assert.doesNotMatch(send, /!imageRequest && state\.activeSkillPath && !activeSkill/);
   assert.match(send, /当前启用的 Skill 尚未加载，请重新扫描或先停用 Skill。/);
   const guardIndex = send.indexOf("当前启用的 Skill 尚未加载");
   assert.ok(guardIndex >= 0);
   assert.ok(guardIndex < send.indexOf("state.messages.push"));
   assert.ok(guardIndex < send.indexOf("this.plugin.persist()"));
   assert.ok(guardIndex < send.indexOf("this.plugin.chatRuntime.runTurn"));
+  const pendingImage = send.match(/this\.pendingImageRequest = \{[\s\S]*?\n\s*\};/)?.[0] ?? "";
+  assert.match(pendingImage, /activeSkill \? buildExplicitSkillInstruction\(activeSkill\) : ""/);
 
   const chat = view.match(/private renderChat\([\s\S]*?private renderChatWelcome/)?.[0] ?? "";
   assert.match(chat, /if \(state\.activeSkillPath\)/);
