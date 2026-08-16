@@ -2,7 +2,7 @@
 
 ## English
 
-WriteX is an Obsidian-native writing workspace for WeChat creators. It calls your local Agent—Codex, Claude, or WorkBuddy—so you can reuse your existing AI subscription budgets while keeping ideas, drafts, images, layouts, and WeChat draft sync beside the active note. It creates or updates WeChat drafts only; it never publishes or mass-sends on your behalf.
+WriteX is an Obsidian-native writing workspace for WeChat creators. Your Markdown note remains the source of truth while you use Codex, Claude, or WorkBuddy to develop material, generate images, preview WeChat layouts, and create or update WeChat drafts only. It never publishes or mass-sends on your behalf.
 
 ## 中文
 
