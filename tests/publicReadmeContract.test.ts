@@ -13,7 +13,7 @@ test("public README leads to a real 30-second install and keeps product capabili
   assert.match(readme, /## 30 秒安装 WriteX/);
   assert.ok(readme.indexOf("## 30 秒安装 WriteX") < readme.indexOf("## 它适合什么场景"));
   assert.doesNotMatch(readme, /## 30 秒开始/);
-  assert.match(readme, /\[WriteX v0\.5\.5\]\(https:\/\/github\.com\/pakco77\/WriteX\/releases\/tag\/0\.5\.5\)/);
+  assert.match(readme, /\[WriteX v0\.5\.6\]\(https:\/\/github\.com\/pakco77\/WriteX\/releases\/tag\/0\.5\.6\)/);
   assert.match(readme, /`main\.js`、`manifest\.json` 和 `styles\.css`/);
   assert.match(readme, /社区目录正在审核/);
   assert.doesNotMatch(readme, /尚未发布可下载安装包/);

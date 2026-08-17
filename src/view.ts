@@ -39,6 +39,7 @@ import { optimizeAnimatedGif } from "./gifOptimizer";
 import { getAgentSession, setAgentSession } from "./conversations";
 import { buildFeedbackInstruction } from "./feedback";
 import { inspectImage, planWeChatImage } from "./images";
+import { describeImageProblem, galleryProblemSummary, missingImageInspection, type ImageProblem } from "./imageProblems";
 import { imageProviderLabel, resolveGeneratedProvider } from "./imageRouting";
 import { buildCutPrompt, sampleCutLenses, sortTopicsNewestFirst } from "./topics";
 import { ThemeLibraryModal } from "./themeLibraryModal";
@@ -97,7 +98,7 @@ function imageStageError(stage: string, source: string, error: unknown): Error {
   return new Error(`${stage}失败：${source} · ${errorMessage(error)}`, { cause: error });
 }
 
-type CopyChoice = "inline" | "optimize" | "relay" | "text-only";
+type CopyChoice = "inline" | "optimize" | "relay" | "text-only" | "exclude";
 
 class CopyPlanModal extends Modal {
   private chosen = false;
@@ -146,7 +147,18 @@ class CopyPlanModal extends Modal {
     const images = container.createDiv({ cls: "oa-copy-plan-images" });
     for (const image of this.plan.images) {
       const row = images.createDiv({ cls: "oa-copy-plan-image" });
+      if (image.problem.status === "unrepairable") {
+        const file = this.app.vault.getAbstractFileByPath(image.source);
+        if (file instanceof TFile) row.createEl("img", {
+          cls: "oa-copy-plan-problem-preview",
+          attr: { src: this.app.vault.getResourcePath(file), alt: image.problem.articleLabel ?? "异常图片" },
+        });
+        else row.createDiv({ cls: "oa-copy-plan-problem-preview is-fallback", text: image.problem.articleLabel ?? "异常图片" });
+      }
       row.createEl("strong", { text: image.source });
+      if (image.problem.status !== "ready") {
+        row.createEl("span", { cls: image.problem.status === "unrepairable" ? "oa-copy-plan-problem" : "oa-copy-plan-route", text: `${image.problem.articleLabel ? `${image.problem.articleLabel} · ` : ""}${image.problem.reason}` });
+      }
       const dimensions = image.width && image.height ? `${image.width}×${image.height}` : "宽高未知";
       const animation = image.animated
         ? ` · ${image.frameCount ?? "?"} 帧 · ${image.frameRate?.toFixed(1) ?? "?"} fps · ${image.durationSeconds?.toFixed(2) ?? "?"} 秒`
@@ -157,6 +169,7 @@ class CopyPlanModal extends Modal {
     const actions = container.createDiv({ cls: "oa-copy-plan-actions" });
     this.action(actions, "直接内嵌并复制", "inline", !this.plan.canDirectCopy, this.plan.canDirectCopy);
     this.action(actions, "优化图片后复制", "optimize", !this.plan.images.some(image => image.path.startsWith("optimize")));
+    this.action(actions, `排除 ${this.plan.excludableImages.length} 张异常图片并复制`, "exclude", !this.plan.excludableImages.length);
     const relayEligible = this.plan.images.every(image => image.path === "inline" || image.relayEligible);
     this.action(actions, "使用自建 Relay 准备公众号图片", "relay", !this.relayConfigured || !relayEligible);
     this.action(actions, "只复制文字和排版", "text-only", false);
@@ -693,6 +706,8 @@ export class AgentView extends ItemView {
   private agentVersion = "";
   private galleryFilter: GalleryFilter = "all";
   private selectedAssetId = "";
+  private galleryProblems = new Map<string, ImageProblem>();
+  private galleryCheckProgress = "";
   private previewMarkdown = "";
   private previewFilePath = "";
   private previewUpdatedAt = "未刷新";
@@ -1552,6 +1567,10 @@ export class AgentView extends ItemView {
     setIcon(importIcon, "upload");
     importButton.createSpan({ text: "导入" });
     importButton.onclick = () => input.click();
+    const check = toolbar.createEl("button", { text: this.galleryCheckProgress || "检查图片", attr: { type: "button" } });
+    check.disabled = Boolean(this.galleryCheckProgress);
+    check.onclick = () => void this.checkGalleryImages(state.assets);
+    if (this.galleryProblems.size) toolbar.createEl("small", { text: galleryProblemSummary([...this.galleryProblems.values()]) });
 
     const assets = state.assets.filter(asset => this.galleryFilter === "all" || asset.source === this.galleryFilter);
     if (!assets.length) {
@@ -1571,6 +1590,9 @@ export class AgentView extends ItemView {
       card.setAttribute("title", "点击管理；拖到正文可插入图片");
       card.onpointerdown = event => this.armImageDrag(event, card, asset);
       card.toggleClass("is-selected", asset.id === this.selectedAssetId);
+      const problem = this.galleryProblems.get(asset.id);
+      card.toggleClass("is-image-problem", problem?.status === "unrepairable");
+      if (problem?.status === "unrepairable") card.setAttribute("title", `图片异常：${problem.reason}`);
       card.toggleClass("is-generating", asset.id === this.regeneratingAssetId);
       const viewport = card.createDiv({ cls: "oa-asset-viewport" });
       const image = viewport.createEl("img", { attr: { src: this.resourcePath(asset), alt: asset.prompt ?? asset.name } });
@@ -1597,6 +1619,27 @@ export class AgentView extends ItemView {
     }
     const selected = assets.find(asset => asset.id === this.selectedAssetId);
     if (selected) this.renderGalleryActions(container, selected);
+  }
+
+  private async checkGalleryImages(assets: ImageAsset[]): Promise<void> {
+    this.galleryProblems.clear();
+    for (let index = 0; index < assets.length; index += 1) {
+      const asset = assets[index];
+      this.galleryCheckProgress = `检查 ${index + 1}/${assets.length}`;
+      this.render();
+      const file = this.app.vault.getAbstractFileByPath(asset.filePath);
+      let inspection;
+      try {
+        inspection = file instanceof TFile
+          ? inspectImage(await this.app.vault.readBinary(file), { fileName: file.name })
+          : missingImageInspection("图片文件已移动或删除。");
+      } catch (error) {
+        inspection = missingImageInspection(errorMessage(error));
+      }
+      this.galleryProblems.set(asset.id, describeImageProblem({ source: asset.filePath, inspection }));
+    }
+    this.galleryCheckProgress = "";
+    this.render();
   }
 
   private renderGalleryActions(container: HTMLElement, asset: ImageAsset): void {
@@ -2357,12 +2400,13 @@ export class AgentView extends ItemView {
     return file instanceof TFile ? this.app.vault.getResourcePath(file) : "";
   }
 
-  private async createCopyPlan(signal: AbortSignal): Promise<CopyPlan> {
+  private async createCopyPlan(signal: AbortSignal, excludedSources = new Set<string>()): Promise<CopyPlan> {
     const sources = extractMarkdownImageSources(this.previewMarkdown);
     const images = [];
     for (let index = 0; index < sources.length; index += 1) {
       if (signal.aborted) throw new DOMException("复制已取消", "AbortError");
       const source = sources[index];
+      if (excludedSources.has(source)) continue;
       this.copyProgress = `正在检查图片 ${index + 1}/${sources.length} · ${source}`;
       this.render();
       const file = /^(https?:|data:image\/)/i.test(source)
@@ -2381,6 +2425,8 @@ export class AgentView extends ItemView {
             mimeMismatch: false,
             issues: ["远程图片或 Vault 中不存在的图片不能直接内嵌。"],
           },
+          articleIndex: index + 1,
+          articleTotal: sources.length,
         });
         continue;
       }
@@ -2390,10 +2436,12 @@ export class AgentView extends ItemView {
         source,
         sha256: createHash("sha256").update(Buffer.from(bytes)).digest("hex"),
         inspection: inspectImage(bytes, { fileName: file.name }),
+        articleIndex: index + 1,
+        articleTotal: sources.length,
       });
       await new Promise<void>(resolve => window.setTimeout(resolve, 0));
     }
-    const baseHtml = this.renderCopyHtml(new Map(), false);
+    const baseHtml = this.renderCopyHtml(new Map(), false, excludedSources);
     const layoutLabel = this.plugin.themeService.listThemes()
       .find(item => item.id === this.previewTheme)?.name ?? this.previewTheme;
     return buildCopyPlan({
@@ -2404,13 +2452,14 @@ export class AgentView extends ItemView {
     });
   }
 
-  private renderCopyHtml(replacements: Map<string, string>, textOnly: boolean): string {
+  private renderCopyHtml(replacements: Map<string, string>, textOnly: boolean, excludedSources = new Set<string>()): string {
     const html = this.plugin.themeService.render(
       this.previewMarkdown,
       this.previewTheme,
-      source => replacements.get(source) ?? source,
+      source => excludedSources.has(source) ? `writex-excluded:${encodeURIComponent(source)}` : replacements.get(source) ?? source,
     ).html;
-    return textOnly ? html.replace(/<img\b[^>]*>/gi, "") : html;
+    const withoutExcluded = html.replace(/<img\b[^>]*writex-excluded:[^>]*>/gi, "");
+    return textOnly ? withoutExcluded.replace(/<img\b[^>]*>/gi, "") : withoutExcluded;
   }
 
   private async executeCopyChoice(choice: CopyChoice, plan: CopyPlan): Promise<void> {
@@ -2418,6 +2467,7 @@ export class AgentView extends ItemView {
       if (choice === "inline") await this.copyInline(plan);
       else if (choice === "text-only") await this.copyTextOnly();
       else if (choice === "optimize") await this.optimizeThenCopy(plan);
+      else if (choice === "exclude") await this.copyWithoutBrokenImages(plan);
       else await this.copyViaRelay(plan);
     } catch (error) {
       if (this.copyController?.signal.aborted) this.finishCopyTask("cancelled", "已取消复制");
@@ -2425,9 +2475,22 @@ export class AgentView extends ItemView {
     }
   }
 
+  private async copyWithoutBrokenImages(plan: CopyPlan): Promise<void> {
+    const excluded = new Set(plan.excludableImages.map(image => image.source));
+    const reduced = await this.createCopyPlan(this.copyController!.signal, excluded);
+    if (reduced.canDirectCopy) await this.copyInline(reduced, new Map(), excluded);
+    else if (reduced.images.some(image => image.path.startsWith("optimize"))) await this.optimizeThenCopy(reduced, excluded);
+    else throw new Error("排除异常图片后仍不能安全复制；请优化剩余图片、使用 Relay 或只复制文字。");
+    const labels = plan.excludableImages.map(image => image.problem.articleLabel ?? image.source).join("、");
+    this.copyProgress = `已排除异常图片：${labels}`;
+    this.render();
+    new Notice(`已排除异常图片：${labels}；原笔记未修改。`);
+  }
+
   private async copyInline(
     plan: CopyPlan,
     byteOverrides: Map<string, { bytes: ArrayBuffer; mimeType: string }> = new Map(),
+    excludedSources = new Set<string>(),
   ): Promise<void> {
     if (!plan.canDirectCopy) throw new Error("当前 CopyPlan 超过内嵌预算，不能直接复制。");
     this.copyTaskState = "rendering";
@@ -2449,7 +2512,7 @@ export class AgentView extends ItemView {
       replacements.set(planned.source, `data:${override?.mimeType ?? planned.mimeType};base64,${Buffer.from(bytes).toString("base64")}`);
       await new Promise<void>(resolve => window.setTimeout(resolve, 0));
     }
-    await this.writeCopyHtml(this.renderCopyHtml(replacements, false));
+    await this.writeCopyHtml(this.renderCopyHtml(replacements, false, excludedSources));
   }
 
   private async copyTextOnly(): Promise<void> {
@@ -2459,13 +2522,13 @@ export class AgentView extends ItemView {
     await this.writeCopyHtml(this.renderCopyHtml(new Map(), true));
   }
 
-  private async optimizeThenCopy(plan: CopyPlan): Promise<void> {
+  private async optimizeThenCopy(plan: CopyPlan, excludedSources = new Set<string>()): Promise<void> {
     this.assertCopyActive();
     this.copyTaskState = "optimizing";
     const optimizedInputs = [];
     const overrides = new Map<string, { bytes: ArrayBuffer; mimeType: string }>();
     const gifCount = plan.images.filter(image => image.path === "optimize-gif").length;
-    const baseHtmlBytes = Buffer.byteLength(this.renderCopyHtml(new Map(), false), "utf8");
+    const baseHtmlBytes = Buffer.byteLength(this.renderCopyHtml(new Map(), false, excludedSources), "utf8");
     const estimatedStaticBase64 = plan.images
       .filter(image => image.path !== "optimize-gif")
       .reduce((sum, image) => sum + 4 * Math.ceil(Math.min(image.byteLength, 900 * 1024) / 3), 0);
@@ -2533,7 +2596,7 @@ export class AgentView extends ItemView {
     if (!optimizedPlan.canDirectCopy) {
       throw new Error(`图片优化后预计剪贴板仍为 ${formatBytes(optimizedPlan.estimatedClipboardHtmlBytes)}，未达到安全预算；请选择 Relay 或只复制文字。`);
     }
-    await this.copyInline(optimizedPlan, overrides);
+    await this.copyInline(optimizedPlan, overrides, excludedSources);
   }
 
   private async copyViaRelay(plan: CopyPlan): Promise<void> {

@@ -1227,6 +1227,23 @@
   box-shadow: 0 0 0 1px var(--oa-accent);
 }
 
+.oa-asset-card.is-image-problem {
+  border: 2px solid var(--text-error);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-error) 35%, transparent);
+}
+
+.oa-asset-card.is-image-problem .oa-asset-viewport::after {
+  content: "图片异常";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 3px 5px;
+  border-radius: 4px;
+  color: white;
+  background: var(--text-error);
+  font-size: 9px;
+}
+
 .oa-asset-card.is-dragging {
   opacity: 0.66;
   cursor: grabbing;
@@ -1645,6 +1662,24 @@
   gap: 4px;
 }
 
+.oa-copy-plan-problem-preview {
+  width: 88px;
+  height: 58px;
+  border: 2px solid var(--text-error);
+  border-radius: 5px;
+  object-fit: cover;
+}
+
+.oa-copy-plan-problem-preview.is-fallback {
+  display: grid;
+  place-items: center;
+  color: var(--text-error);
+  background: var(--background-primary);
+  font-size: 10px;
+}
+
+.oa-copy-plan-problem { color: var(--text-error); }
+
 .oa-copy-plan-image strong,
 .oa-copy-plan-image span {
   overflow-wrap: anywhere;
@@ -1750,6 +1785,37 @@
 .oa-sync-issues {
   overflow: hidden;
 }
+
+.oa-sync-image-issue {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 9px;
+  padding: 9px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  color: var(--text-error);
+}
+
+.oa-sync-image-issue img,
+.oa-sync-image-fallback {
+  width: 72px;
+  height: 54px;
+  border: 2px solid var(--text-error);
+  border-radius: 5px;
+  object-fit: cover;
+}
+
+.oa-sync-image-fallback {
+  display: grid;
+  place-items: center;
+  color: var(--text-error);
+  background: var(--background-primary);
+  font-size: 10px;
+}
+
+.oa-sync-image-issue strong,
+.oa-sync-image-issue span,
+.oa-sync-image-issue code { display: block; overflow-wrap: anywhere; }
+.oa-sync-image-issue span { margin: 3px 0; }
 
 .oa-sync-issue {
   padding: 9px 12px;

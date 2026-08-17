@@ -85,3 +85,18 @@ test("damaged images are blocked and static oversized images get optimization an
   assert.equal(plan.images[1]?.relayEligible, true);
   assert.equal(plan.canDirectCopy, false);
 });
+
+test("only unrecoverable images are offered for safe exclusion", () => {
+  const plan = buildCopyPlan({
+    articleCharacters: 100,
+    layoutLabel: "小黑",
+    baseHtmlBytes: 1_000,
+    images: [
+      image("broken.png", 100, { complete: false }),
+      image("large.png", 4 * 1024 * 1024),
+    ],
+  });
+  assert.equal(plan.images[0]?.problem?.status, "unrepairable");
+  assert.equal(plan.images[1]?.problem?.status, "repairable");
+  assert.deepEqual(plan.excludableImages.map(item => item.source), ["broken.png"]);
+});

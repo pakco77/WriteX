@@ -30,7 +30,7 @@ WriteX 直接调用你本地的 Agent，共用现有的 AI 订阅额度，不额
 <summary>查看文字安装路径</summary>
 
 
-1. 从 [WriteX v0.5.5](https://github.com/pakco77/WriteX/releases/tag/0.5.5) 下载 `main.js`、`manifest.json` 和 `styles.css`。
+1. 从 [WriteX v0.5.6](https://github.com/pakco77/WriteX/releases/tag/0.5.6) 下载 `main.js`、`manifest.json` 和 `styles.css`。
 2. 将三份文件放进 `<你的 Vault>/.obsidian/plugins/writex/`；从旧版 `obsidian-agent` 迁移时，保留旧目录和数据，并只启用 `writex`。
 3. 重启 Obsidian，在 `设置 → 第三方插件` 启用 WriteX，然后打开一篇笔记，从右侧栏进入。
 
@@ -41,7 +41,7 @@ WriteX 直接调用你本地的 Agent，共用现有的 AI 订阅额度，不额
 WriteX 需要 Obsidian 1.11.4 或更高版本。
 
 
-当前可用的手动安装包是 [v0.5.5 GitHub Release](https://github.com/pakco77/WriteX/releases/tag/0.5.5)，仅含上面三份文件：
+当前可用的手动安装包是 [v0.5.6 GitHub Release](https://github.com/pakco77/WriteX/releases/tag/0.5.6)，仅含上面三份文件：
 
 
 ```text
@@ -132,7 +132,7 @@ WriteX is an Obsidian-native writing workspace for WeChat creators. Your Markdow
 <details>
 <summary>查看文字安装路径</summary>
 
-1. 从 [WriteX v0.5.5](https://github.com/pakco77/WriteX/releases/tag/0.5.5) 下载 `main.js`、`manifest.json` 和 `styles.css`。
+1. 从 [WriteX v0.5.6](https://github.com/pakco77/WriteX/releases/tag/0.5.6) 下载 `main.js`、`manifest.json` 和 `styles.css`。
 2. 将三份文件放进 `<你的 Vault>/.obsidian/plugins/writex/`；从旧版 `obsidian-agent` 迁移时，保留旧目录和数据，并只启用 `writex`。
 3. 重启 Obsidian，在 `设置 → 第三方插件` 启用 WriteX，然后打开一篇笔记，从右侧栏进入。
 
@@ -140,7 +140,7 @@ WriteX is an Obsidian-native writing workspace for WeChat creators. Your Markdow
 
 WriteX 需要 Obsidian 1.11.4 或更高版本。
 
-当前可用的手动安装包是 [v0.5.5 GitHub Release](https://github.com/pakco77/WriteX/releases/tag/0.5.5)，仅含上面三份文件：
+当前可用的手动安装包是 [v0.5.6 GitHub Release](https://github.com/pakco77/WriteX/releases/tag/0.5.6)，仅含上面三份文件：
 
 ```text
 <你的 Vault>/.obsidian/plugins/writex/

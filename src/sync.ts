@@ -9,6 +9,7 @@ import {
   requestUrl,
 } from "obsidian";
 import { inspectImage, planWeChatImage, type ImageInspection } from "./images";
+import { describeImageProblem, missingImageInspection, type ImageProblem } from "./imageProblems";
 import { convertForWeChat } from "./imageConversion";
 import type ObsidianAgentPlugin from "./main";
 import { runSync, type SyncAsset, type SyncSnapshot } from "./syncFlow";
@@ -58,6 +59,7 @@ interface PreparedNote {
   pendingAnimationConversions: number;
   coverLabel: string;
   remoteImages: string[];
+  imageProblems: ImageProblem[];
   snapshot?: SyncSnapshot;
 }
 
@@ -240,6 +242,7 @@ async function prepareNote(
   const issues: PreflightIssue[] = [];
   const unresolvedImages: string[] = [];
   const remoteImages: string[] = [];
+  const imageProblems: ImageProblem[] = [];
   const placeholderBySource = new Map<string, string>();
   const assetByHash = new Map<string, SyncAsset>();
 
@@ -254,14 +257,17 @@ async function prepareNote(
     const imageFile = resolveVaultImage(plugin, source, file.path);
     if (!imageFile) {
       unresolvedImages.push(source);
+      imageProblems.push(describeImageProblem({ source, articleIndex: index + 1, total: imageSources.length, inspection: missingImageInspection("无法在 Vault 中找到正文图片。") }));
       continue;
     }
     try {
       const asset = await normalizeAsset(plugin, imageFile, "content", allowAnimationLoss);
+      imageProblems.push(describeImageProblem({ source, articleIndex: index + 1, total: imageSources.length, inspection: asset.inspection! }));
       assetByHash.set(asset.sha256, assetByHash.get(asset.sha256) ?? asset);
       placeholderBySource.set(source, assetPlaceholder(asset.sha256));
     } catch (error) {
       issues.push({ level: "block", code: "invalid_content_image", message: errorMessage(error), assetPath: source });
+      imageProblems.push(describeImageProblem({ source, articleIndex: index + 1, total: imageSources.length, inspection: missingImageInspection(errorMessage(error)) }));
     }
   }
 
@@ -353,6 +359,7 @@ async function prepareNote(
     pendingAnimationConversions: contentAssets.filter(asset => asset.pendingConversion).length + (cover?.pendingConversion ? 1 : 0),
     coverLabel: cover?.placeholder ? "纯白占位封面（默认）" : metadata.coverPath,
     remoteImages: [...new Set(remoteImages)],
+    imageProblems,
   };
   if (cover && !issues.some(issue => issue.level === "block")) {
     const contentHash = computeContentHash({
@@ -622,6 +629,18 @@ class WeChatSyncModal extends Modal {
     for (const issue of this.prepared.issues) {
       if (issue.code === "remote_image" && issue.assetPath) {
         this.renderRemoteImageIssue(list, issue.assetPath);
+        continue;
+      }
+      const problem = issue.assetPath ? this.prepared.imageProblems.find(item => item.source === issue.assetPath) : undefined;
+      if (problem?.status === "unrepairable") {
+        const row = list.createDiv({ cls: "oa-sync-image-issue" });
+        const file = resolveVaultImage(this.plugin, problem.source, this.notePath);
+        if (file) row.createEl("img", { attr: { src: this.plugin.app.vault.getResourcePath(file), alt: problem.articleLabel ?? "异常图片" } });
+        else row.createDiv({ cls: "oa-sync-image-fallback", text: "图片不可用" });
+        const detail = row.createDiv();
+        detail.createEl("strong", { text: `${problem.articleLabel ?? "正文图片"} · 需要替换` });
+        detail.createEl("span", { text: problem.reason });
+        detail.createEl("code", { text: problem.source });
         continue;
       }
       const label = issue.level === "block" ? "阻塞" : issue.level === "warn" ? "警告" : "已处理";

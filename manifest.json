@@ -1,7 +1,7 @@
 {
   "id": "writex",
   "name": "WriteX",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "minAppVersion": "1.11.4",
   "description": "AI 强化原创写作：调用本地 Agent（Codex/Claude/WorkBuddy），在 Obsidian 完成创作、排版与微信公众号草稿创建/更新。",
   "author": "Pakco",

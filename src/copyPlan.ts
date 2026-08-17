@@ -1,4 +1,5 @@
 import type { ImageInspection } from "./images.ts";
+import { describeImageProblem, type ImageProblem } from "./imageProblems.ts";
 
 export const COPY_INLINE_STATIC_MAX_BYTES = 1024 * 1024;
 export const COPY_INLINE_GIF_MAX_BYTES = 5 * 1024 * 1024;
@@ -28,6 +29,8 @@ export interface CopyPlanImageInput {
   source: string;
   sha256: string;
   inspection: ImageInspection;
+  articleIndex?: number;
+  articleTotal?: number;
 }
 
 export interface CopyPlanImage {
@@ -44,6 +47,9 @@ export interface CopyPlanImage {
   path: CopyImagePath;
   relayEligible: boolean;
   recommendation: string;
+  articleIndex?: number;
+  articleTotal?: number;
+  problem: ImageProblem;
 }
 
 export interface CopyPlanInput {
@@ -67,12 +73,19 @@ export interface CopyPlan {
   writeCredits: 0;
   canDirectCopy: boolean;
   issues: CopyPlanIssue[];
+  excludableImages: CopyPlanImage[];
 }
 
 const base64Bytes = (bytes: number): number => 4 * Math.ceil(bytes / 3);
 
 function routeImage(input: CopyPlanImageInput): CopyPlanImage {
   const image = input.inspection;
+  const problem = describeImageProblem({
+    source: input.source,
+    articleIndex: input.articleIndex,
+    total: input.articleTotal,
+    inspection: image,
+  });
   if (!image.mimeType || !image.complete) {
     return {
       source: input.source,
@@ -87,7 +100,10 @@ function routeImage(input: CopyPlanImageInput): CopyPlanImage {
       durationSeconds: image.durationSeconds,
       path: "blocked",
       relayEligible: false,
-      recommendation: "文件损坏或格式无法识别，需先更换图片。",
+      recommendation: problem.reason,
+      articleIndex: input.articleIndex,
+      articleTotal: input.articleTotal,
+      problem,
     };
   }
   if (image.mimeType === "image/gif" && image.animated) {
@@ -108,6 +124,9 @@ function routeImage(input: CopyPlanImageInput): CopyPlanImage {
       recommendation: inline
         ? "GIF 在单图预算内；仍需在公众号网页编辑器验证动画是否保留。"
         : "保留时长，建议降到 12–15 fps、缩小分辨率并优化色板，目标小于 8 MB。",
+      articleIndex: input.articleIndex,
+      articleTotal: input.articleTotal,
+      problem,
     };
   }
   const inline = image.byteLength <= COPY_INLINE_STATIC_MAX_BYTES
@@ -128,6 +147,9 @@ function routeImage(input: CopyPlanImageInput): CopyPlanImage {
     recommendation: inline
       ? "在本地内嵌预算内。"
       : "先转换或压缩为微信接受的小于 1 MB 的 JPG/PNG；也可经自建 Relay 准备微信 URL。",
+    articleIndex: input.articleIndex,
+    articleTotal: input.articleTotal,
+    problem,
   };
 }
 
@@ -193,6 +215,7 @@ export function buildCopyPlan(input: CopyPlanInput): CopyPlan {
     writeCredits: 0,
     canDirectCopy,
     issues,
+    excludableImages: images.filter(image => image.problem.canExcludeFromCopy),
   };
 }
 

@@ -2,6 +2,12 @@
 
 All notable public changes to WriteX are documented here.
 
+## 0.5.6 - 2026-08-18
+
+- Made blocking image errors actionable: the preflight identifies the article image number, source, and a preview or explicit unavailable-image fallback before any external draft action.
+- Added a local gallery image check that marks unreadable, missing, or malformed images with a red border.
+- Made CopyPlan show problematic images and safely exclude only unrecoverable images from the copied HTML without changing the Markdown note or original image files.
+
 ## 0.5.5 - 2026-08-15
 
 - Removed the redundant plugin-name settings heading and use Obsidian's HTML sanitizer before appending validated theme previews.
