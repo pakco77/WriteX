@@ -24,6 +24,19 @@ export interface ChatSkillSnapshot {
   sourceHash: string;
 }
 
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  filePath: string;
+  mimeType: string;
+  byteLength: number;
+  kind: "image" | "file";
+}
+
+export interface ChatAttachmentContext extends ChatAttachment {
+  absolutePath: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -31,6 +44,7 @@ export interface ChatMessage {
   content: string;
   createdAt: number;
   context?: SelectionContext;
+  attachments?: ChatAttachment[];
   assetId?: string;
   mode?: ChatMode;
   agent?: ChatAgentId;

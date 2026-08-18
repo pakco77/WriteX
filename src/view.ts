@@ -27,6 +27,7 @@ import {
 } from "./chatAgents";
 import { writeClipboardText } from "./clipboard";
 import { splitAssistantMarkdownBlocks } from "./chatBlocks";
+import { validateChatAttachmentInputs } from "./chatAttachments";
 import {
   buildCopyPlan,
   COPY_HTML_BUDGET_BYTES,
@@ -57,6 +58,7 @@ import {
 } from "./wechat";
 import {
   canRegenerateImage,
+  type ChatAttachment,
   type ChatAgentId,
   type ChatMessage,
   type ChatMode,
@@ -689,6 +691,7 @@ export class AgentView extends ItemView {
   private selectionContext: SelectionContext | null = null;
   private composerEl: HTMLTextAreaElement | null = null;
   private composerDraft = "";
+  private composerAttachments: File[] = [];
   private running = false;
   private runningTask: RunningTask | null = null;
   private controller: AbortController | null = null;
@@ -1084,6 +1087,7 @@ export class AgentView extends ItemView {
         this.render();
       };
     }
+    this.renderComposerAttachments(form);
     const textarea = form.createEl("textarea", {
       attr: {
         rows: "3",
@@ -1101,6 +1105,12 @@ export class AgentView extends ItemView {
     textarea.oninput = () => {
       this.composerDraft = textarea.value;
       autoGrow(textarea);
+    };
+    textarea.onpaste = event => {
+      const files = [...event.clipboardData?.files ?? []];
+      if (!files.length) return;
+      event.preventDefault();
+      this.addComposerAttachments(files);
     };
     textarea.onkeydown = event => {
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
@@ -1205,6 +1215,20 @@ export class AgentView extends ItemView {
       window.setTimeout(() => this.composerEl?.focus(), 0);
     };
 
+    const attachmentInput = modeRow.createEl("input", { attr: { type: "file", multiple: "" } });
+    attachmentInput.addClass("oa-visually-hidden");
+    attachmentInput.onchange = () => {
+      this.addComposerAttachments([...attachmentInput.files ?? []]);
+      attachmentInput.value = "";
+    };
+    const attach = modeRow.createEl("button", {
+      cls: "oa-composer-attach",
+      attr: { type: "button", "aria-label": "添加图片或附件", title: "添加图片或附件" },
+    });
+    setIcon(attach, "paperclip");
+    attach.disabled = this.running || this.imageMode;
+    attach.onclick = () => attachmentInput.click();
+
     const send = modeRow.createEl("button", {
       cls: "oa-send",
       attr: {
@@ -1219,11 +1243,60 @@ export class AgentView extends ItemView {
       event.preventDefault();
       void this.sendMessage(textarea.value);
     };
+    form.ondragover = event => {
+      if (!event.dataTransfer?.files.length) return;
+      event.preventDefault();
+      form.addClass("is-dragging-attachments");
+    };
+    form.ondragleave = event => {
+      if (event.target === form) form.removeClass("is-dragging-attachments");
+    };
+    form.ondrop = event => {
+      const files = [...event.dataTransfer?.files ?? []];
+      if (!files.length) return;
+      event.preventDefault();
+      form.removeClass("is-dragging-attachments");
+      this.addComposerAttachments(files);
+    };
     form.createEl("small", {
       cls: "oa-agent-cost",
       text: `Enter 发送 · Shift+Enter 换行 · 使用 ${currentAgentLabel} 账号额度 · WriteX 积分 0`,
     });
     window.setTimeout(() => { stream.scrollTop = stream.scrollHeight; }, 0);
+  }
+
+  private addComposerAttachments(files: File[]): void {
+    if (!files.length || this.imageMode) return;
+    const next = [...this.composerAttachments, ...files];
+    const error = validateChatAttachmentInputs(next);
+    if (error) {
+      new Notice(error);
+      return;
+    }
+    this.composerAttachments = next;
+    this.render();
+    window.setTimeout(() => this.composerEl?.focus(), 0);
+  }
+
+  private renderComposerAttachments(container: HTMLElement): void {
+    if (!this.composerAttachments.length) return;
+    const attachments = container.createDiv({ cls: "oa-composer-attachments", attr: { "aria-label": "待发送附件" } });
+    for (const [index, file] of this.composerAttachments.entries()) {
+      const chip = attachments.createDiv({ cls: `oa-composer-attachment${file.type.startsWith("image/") ? " is-image" : ""}` });
+      const icon = chip.createSpan();
+      setIcon(icon, file.type.startsWith("image/") ? "image" : "paperclip");
+      chip.createSpan({ text: file.name || "未命名附件" });
+      chip.createEl("small", { text: formatBytes(file.size) });
+      const remove = chip.createEl("button", {
+        attr: { type: "button", "aria-label": `移除附件 ${file.name || "未命名附件"}`, title: "移除附件" },
+      });
+      setIcon(remove, "x");
+      remove.onclick = () => {
+        this.composerAttachments.splice(index, 1);
+        this.render();
+        window.setTimeout(() => this.composerEl?.focus(), 0);
+      };
+    }
   }
 
   private renderChatWelcome(container: HTMLElement): void {
@@ -1361,6 +1434,7 @@ export class AgentView extends ItemView {
       context.createSpan({ text: `引用 ${message.context.text.length} 字选区` });
       context.setAttribute("title", message.context.text);
     }
+    if (message.attachments?.length) this.renderMessageAttachments(item, message.attachments);
     if (message.mode === "plan") meta.createSpan({ cls: "oa-message-mode", text: "计划模式" });
     if (message.kind === "image" && message.assetId) {
       const asset = assets.find(candidate => candidate.id === message.assetId);
@@ -1387,6 +1461,24 @@ export class AgentView extends ItemView {
       }
     }
     if (message.role === "assistant" && message.kind === "text") this.renderMessageActions(item, message);
+  }
+
+  private renderMessageAttachments(container: HTMLElement, attachments: ChatAttachment[]): void {
+    const list = container.createDiv({ cls: "oa-message-attachments", attr: { "aria-label": `已附 ${attachments.length} 个上下文文件` } });
+    for (const attachment of attachments) {
+      const file = this.app.vault.getAbstractFileByPath(attachment.filePath);
+      const item = list.createDiv({ cls: `oa-message-attachment${attachment.kind === "image" ? " is-image" : ""}` });
+      if (attachment.kind === "image" && file instanceof TFile) {
+        item.createEl("img", { attr: { src: this.app.vault.getResourcePath(file), alt: attachment.name } });
+      } else {
+        const icon = item.createSpan();
+        setIcon(icon, attachment.kind === "image" ? "image-off" : "paperclip");
+      }
+      const detail = item.createDiv();
+      detail.createEl("strong", { text: attachment.name });
+      detail.createEl("small", { text: `${attachment.mimeType} · ${formatBytes(attachment.byteLength)}` });
+      if (!(file instanceof TFile)) item.createEl("small", { cls: "oa-message-attachment-missing", text: "文件已移动或删除" });
+    }
   }
 
   private renderAssistantBlocks(container: HTMLElement, message: ChatMessage): void {
@@ -1978,6 +2070,7 @@ export class AgentView extends ItemView {
     if (this.running) this.stopRun();
     await this.plugin.clearConversation(this.notePath);
     this.composerDraft = "";
+    this.composerAttachments = [];
     this.pendingImageRequest = null;
     this.selectionContext = this.plugin.captureActiveSelection();
     this.activeTab = "chat";
@@ -1986,12 +2079,17 @@ export class AgentView extends ItemView {
 
   private async sendMessage(raw: string): Promise<void> {
     const request = raw.trim();
-    if (!request || !this.notePath) return;
+    const queuedAttachments = [...this.composerAttachments];
+    if ((!request && !queuedAttachments.length) || !this.notePath) return;
     const agent = this.plugin.agentSettings.activeChatAgent;
     const imageRequest = this.imageMode;
     if (imageRequest ? this.imageRunning : this.running) return;
     if (imageRequest && agent !== "codex") {
       new Notice("当前 Agent 生图路径仍使用 Codex，请先切回 Codex。WriteX 不会静默切换 Agent。");
+      return;
+    }
+    if (imageRequest && queuedAttachments.length) {
+      new Notice("请先退出生图模式，再把图片或附件作为 Chat 上下文发送。");
       return;
     }
     if (!imageRequest && this.agentStatus !== "ready") {
@@ -2036,7 +2134,15 @@ export class AgentView extends ItemView {
     } : undefined;
     const turnMode = imageRequest ? "chat" : this.chatMode;
     const userMessageId = createId("message");
+    let attachments: ChatAttachment[] = [];
+    try {
+      if (queuedAttachments.length) attachments = await this.plugin.stageChatAttachments(this.notePath, userMessageId, queuedAttachments);
+    } catch (error) {
+      new Notice(errorMessage(error));
+      return;
+    }
     this.composerDraft = "";
+    this.composerAttachments = [];
     state.messages.push({
       id: userMessageId,
       role: "user",
@@ -2044,6 +2150,7 @@ export class AgentView extends ItemView {
       content: request,
       createdAt: Date.now(),
       context,
+      attachments: attachments.length ? attachments : undefined,
       mode: turnMode,
       agent,
       model: model || "默认",
@@ -2082,8 +2189,12 @@ export class AgentView extends ItemView {
     this.render();
     try {
       const noteContent = await this.app.vault.cachedRead(file);
+      const attachmentContext = attachments.map(attachment => ({
+        ...attachment,
+        absolutePath: join(this.plugin.getVaultBasePath(), attachment.filePath),
+      }));
       const prompt = buildWritingPrompt({
-        request,
+        request: request || "请阅读我附上的文件，并告诉我其中最值得继续写的内容。",
         filePath: this.notePath,
         noteContent,
         selection: context?.text,
@@ -2091,6 +2202,7 @@ export class AgentView extends ItemView {
         mode: turnMode,
         skillInstruction: activeSkill ? buildExplicitSkillInstruction(activeSkill) : undefined,
         feedbackInstruction: buildFeedbackInstruction(this.plugin.data.feedbackMemory, agent, activeSkill?.name),
+        attachments: attachmentContext,
       });
       const result = await this.plugin.chatRuntime.runTurn({
         agent,
@@ -2099,6 +2211,8 @@ export class AgentView extends ItemView {
         sessionId: getAgentSession(state, agent),
         model,
         reasoningEffort: reasoningEffort || undefined,
+        imagePaths: attachments.filter(attachment => attachment.kind === "image")
+          .map(attachment => join(this.plugin.getVaultBasePath(), attachment.filePath)),
         signal: controller.signal,
       });
       setAgentSession(state, agent, result.threadId);

@@ -208,6 +208,26 @@ test("the compact Chat hierarchy keeps views in the header and tools beside Skil
   assert.match(styles, /\.oa-composer-mode-row button\.oa-send[\s\S]*?margin-left:\s*auto/);
 });
 
+test("Chat uploads stay local, show removable context chips, and keep image input explicit", async () => {
+  const [view, main, styles] = await Promise.all([
+    readFile(new URL("../src/view.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/main.ts", import.meta.url), "utf8"),
+    readFile(new URL("../styles.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(view, /"添加图片或附件"/);
+  assert.match(view, /textarea\.onpaste[\s\S]*clipboardData\?\.files/);
+  assert.match(view, /form\.ondrop[\s\S]*dataTransfer\?\.files/);
+  assert.match(view, /renderComposerAttachments/);
+  assert.match(view, /renderMessageAttachments/);
+  assert.match(view, /request \|\| "请阅读我附上的文件/);
+  assert.match(view, /imagePaths: attachments\.filter/);
+  assert.match(main, /attachments\/agent\/\$\{noteName\}\/chat\/\$\{messageId\}/);
+  assert.match(main, /stageChatAttachments/);
+  assert.match(main, /vault\.createBinary/);
+  assert.match(styles, /\.oa-composer\.is-dragging-attachments/);
+  assert.match(styles, /\.oa-message-attachment\.is-image img/);
+});
+
 test("assistant copy uses the desktop clipboard and reports a real write", async () => {
   const writes: string[] = [];
   await writeClipboardText("可复制的回答", {
@@ -430,6 +450,23 @@ test("Codex arguments use an optional model and exact reasoning effort for new a
   assert.deepEqual(resumed.slice(-2), ["thread-123", "-"]);
 });
 
+test("Codex receives only explicitly attached local images as native visual input", () => {
+  const args = buildCodexArgs({
+    cwd: "/vault",
+    imagePaths: ["/vault/attachments/agent/文章/chat/m-1/photo.png"],
+  });
+  assert.equal(args[args.indexOf("--image") + 1], "/vault/attachments/agent/文章/chat/m-1/photo.png");
+  assert.equal(args.includes("--sandbox"), true);
+
+  const resumed = buildCodexArgs({
+    cwd: "/vault",
+    threadId: "thread-1",
+    imagePaths: ["/vault/attachments/agent/文章/chat/m-2/chart.jpg"],
+  });
+  assert.equal(resumed[resumed.indexOf("--image") + 1], "/vault/attachments/agent/文章/chat/m-2/chart.jpg");
+  assert.equal(resumed.at(-2), "thread-1");
+});
+
 test("Codex image turns are ephemeral and only the image entry gets workspace write access", () => {
   const args = buildCodexImageArgs({
     cwd: "/vault",
@@ -493,6 +530,37 @@ test("writing prompt includes selection and clips long note context", () => {
   assert.match(prompt, /正文已截断/);
   assert.match(prompt, /匿名结构特征/);
   assert.doesNotMatch(prompt, /A{13}/);
+});
+
+test("writing prompt exposes only the user-attached local files and permits reading that bounded list", () => {
+  const prompt = buildWritingPrompt({
+    request: "根据这些材料给我三个切口",
+    filePath: "文章.md",
+    noteContent: "正文",
+    maxContextChars: 100,
+    attachments: [{
+      id: "attachment-1",
+      name: "访谈记录.pdf",
+      filePath: "attachments/agent/文章/chat/message-1/访谈记录.pdf",
+      absolutePath: "/vault/attachments/agent/文章/chat/message-1/访谈记录.pdf",
+      mimeType: "application/pdf",
+      byteLength: 1024,
+      kind: "file",
+    }, {
+      id: "attachment-2",
+      name: "现场照片.png",
+      filePath: "attachments/agent/文章/chat/message-1/现场照片.png",
+      absolutePath: "/vault/attachments/agent/文章/chat/message-1/现场照片.png",
+      mimeType: "image/png",
+      byteLength: 2048,
+      kind: "image",
+    }],
+  });
+  assert.match(prompt, /只允许读取下面明确附上的本地文件/);
+  assert.match(prompt, /访谈记录\.pdf/);
+  assert.match(prompt, /现场照片\.png/);
+  assert.match(prompt, /\/vault\/attachments\/agent\/文章\/chat\/message-1/);
+  assert.match(prompt, /不要访问未列出的 Vault 文件/);
 });
 
 test("writing prompt includes only the explicitly selected Skill instruction", () => {

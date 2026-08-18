@@ -19,6 +19,7 @@ import { CodexImageUnavailableError, CodexRuntime, preserveSelectionWhitespace }
 import { ChatAgentRuntime } from "./chatAgents";
 import { archiveActiveConversation, restoreArchivedConversation } from "./conversations";
 import { buildMarkdownBlockInsertion } from "./chatBlocks";
+import { CHAT_ATTACHMENT_MAX_BYTES, validateChatAttachmentInputs } from "./chatAttachments";
 import { asCodeMirrorDropBridge, resolveLineDrop } from "./editorDrop";
 import { inspectImage } from "./images";
 import { recordChatFeedback } from "./feedback";
@@ -51,6 +52,7 @@ import {
   migrateSettings,
   moveNoteStatePath,
   type AgentSettings,
+  type ChatAttachment,
   type CursorPosition,
   type ImageAsset,
   type ImageCapability,
@@ -578,6 +580,52 @@ export default class ObsidianAgentPlugin extends Plugin {
       throw new Error(`无法通过文件签名确认图片完整性${inspection.issues.length ? `：${inspection.issues.join("；")}` : "。"}`);
     }
     return this.storeImage(filePath, bytes, file.name, inspection.mimeType, { source: "manual" });
+  }
+
+  async stageChatAttachments(notePath: string, messageId: string, files: readonly File[]): Promise<ChatAttachment[]> {
+    const inputError = validateChatAttachmentInputs(files);
+    if (inputError) throw new Error(inputError);
+    const noteName = safeSegment(notePath.split("/").pop()?.replace(/\.md$/i, "") ?? "note") || "note";
+    const folder = normalizePath(`attachments/agent/${noteName}/chat/${messageId}`);
+    await this.ensureFolder(folder);
+    const created: ChatAttachment[] = [];
+    try {
+      for (const file of files) {
+        const bytes = await file.arrayBuffer();
+        if (!bytes.byteLength || bytes.byteLength > CHAT_ATTACHMENT_MAX_BYTES) throw new Error(`“${file.name || "未命名附件"}”不符合附件大小限制。`);
+        const inspected = inspectImage(bytes, { fileName: file.name, declaredMime: file.type });
+        if (file.type.startsWith("image/") && (!inspected.mimeType || !inspected.complete)) {
+          throw new Error(`“${file.name || "未命名图片"}”无法通过文件签名确认图片完整性。`);
+        }
+        const image = inspected.mimeType && inspected.complete ? inspected : undefined;
+        const originalName = chatAttachmentName(file.name);
+        let candidate = normalizePath(`${folder}/${originalName}`);
+        let suffix = 1;
+        while (this.app.vault.getAbstractFileByPath(candidate)) {
+          const dot = originalName.lastIndexOf(".");
+          const stem = dot > 0 ? originalName.slice(0, dot) : originalName;
+          const ext = dot > 0 ? originalName.slice(dot) : "";
+          candidate = normalizePath(`${folder}/${stem}-${suffix}${ext}`);
+          suffix += 1;
+        }
+        await this.app.vault.createBinary(candidate, bytes);
+        created.push({
+          id: randomUUID(),
+          name: originalName,
+          filePath: candidate,
+          mimeType: image?.mimeType ?? ((file.type || "application/octet-stream").trim().toLowerCase().replace(/[^a-z0-9.+/-]/g, "").slice(0, 127) || "application/octet-stream"),
+          byteLength: bytes.byteLength,
+          kind: image?.mimeType ? "image" : "file",
+        });
+      }
+      return created;
+    } catch (error) {
+      for (const attachment of created) {
+        const file = this.app.vault.getAbstractFileByPath(attachment.filePath);
+        if (file instanceof TFile) await this.app.vault.delete(file).catch(() => undefined);
+      }
+      throw error;
+    }
   }
 
   async syncReferencedImages(notePath: string, markdown: string): Promise<number> {
@@ -1277,6 +1325,11 @@ function cleanAssistantMarkdown(value: string): string {
 
 function safeSegment(value: string): string {
   return value.replace(/[\\/:*?"<>|#^[\]]+/g, "-").replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+function chatAttachmentName(value: string): string {
+  const name = safeSegment(value).slice(0, 160);
+  return name && name !== "." && name !== ".." ? name : "attachment";
 }
 
 function imageExtension(mimeType: string, name: string): string {

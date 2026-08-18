@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { access, readFile, readdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { inspectImage, type SupportedImageMime } from "./images.ts";
-import type { CodexReasoningEffort, ImageSize } from "./types.ts";
+import type { ChatAttachmentContext, CodexReasoningEffort, ImageSize } from "./types.ts";
 
 export interface CodexTurnRequest {
   cwd: string;
@@ -11,6 +11,7 @@ export interface CodexTurnRequest {
   threadId?: string;
   model?: string;
   reasoningEffort?: Exclude<CodexReasoningEffort, "">;
+  imagePaths?: string[];
   ephemeral?: boolean;
   signal?: AbortSignal;
 }
@@ -79,6 +80,7 @@ export function buildWritingPrompt(input: {
   mode?: "chat" | "plan";
   skillInstruction?: string;
   feedbackInstruction?: string;
+  attachments?: ChatAttachmentContext[];
 }): string {
   const clipped = input.noteContent.length > input.maxContextChars
     ? `${input.noteContent.slice(0, input.maxContextChars)}\n\n[正文已截断]`
@@ -89,15 +91,26 @@ export function buildWritingPrompt(input: {
   const modeInstruction = input.mode === "plan"
     ? "当前是 Plan 模式。不要直接给成稿或假装已经执行；请先给出目标、约束、分步方案，以及需要用户确认的关键选择。"
     : "需要改写时，直接给出可以放回正文的 Markdown；需要分析时，给出简洁、具体、可执行的判断。";
-  const toolBoundary = input.skillInstruction?.trim()
-    ? "只允许读取显式启用的 Skill 及其任务所需引用；不要修改文件，不要访问网络，不要运行其他命令。"
-    : "不要修改文件，不要运行命令，不要调用工具。";
+  const attachments = input.attachments?.length
+    ? [
+      "用户附上的上下文：只允许读取这个列表中的本地文件；不要访问未列出的 Vault 文件。",
+      ...input.attachments.map(attachment => `- ${attachment.kind === "image" ? "图片" : "文件"}：${attachment.name}（${attachment.mimeType}，${attachment.byteLength} bytes）\n  ${attachment.absolutePath}`),
+    ].join("\n")
+    : "";
+  const toolBoundary = input.skillInstruction?.trim() && input.attachments?.length
+    ? "只允许读取显式启用的 Skill 及下面明确附上的本地文件；不要修改文件，不要访问网络，不要运行其他命令。"
+    : input.skillInstruction?.trim()
+      ? "只允许读取显式启用的 Skill 及其任务所需引用；不要修改文件，不要访问网络，不要运行其他命令。"
+      : input.attachments?.length
+        ? "只允许读取下面明确附上的本地文件；不要修改文件，不要访问网络，不要运行其他命令。"
+        : "不要修改文件，不要运行命令，不要调用工具。";
   return [
     "你是运行在 Obsidian 右侧的中文公众号写作助手。",
     `只完成用户提出的写作任务。${toolBoundary}`,
     modeInstruction,
     input.feedbackInstruction?.trim() || "",
     input.skillInstruction?.trim() || "",
+    attachments,
     `当前笔记：${input.filePath}`,
     selection,
     "当前笔记内容：",
@@ -135,15 +148,16 @@ const LEAN_FLAGS = [
   "--disable", "skill_search",
 ];
 
-export function buildCodexArgs(request: Pick<CodexTurnRequest, "cwd" | "threadId" | "model" | "reasoningEffort" | "ephemeral">): string[] {
+export function buildCodexArgs(request: Pick<CodexTurnRequest, "cwd" | "threadId" | "model" | "reasoningEffort" | "imagePaths" | "ephemeral">): string[] {
   const model = request.model?.trim();
   const modelArgs = model ? ["--model", model] : [];
   const reasoningArgs = request.reasoningEffort
     ? ["-c", `model_reasoning_effort="${request.reasoningEffort}"`]
     : [];
+  const imageArgs = request.imagePaths?.length ? ["--image", ...request.imagePaths] : [];
   return request.threadId
-    ? ["exec", "resume", ...LEAN_FLAGS, ...modelArgs, ...reasoningArgs, "-c", 'sandbox_mode="read-only"', request.threadId, "-"]
-    : ["exec", ...LEAN_FLAGS, ...(request.ephemeral ? ["--ephemeral"] : []), ...modelArgs, ...reasoningArgs, "--sandbox", "read-only", "-C", request.cwd, "-"];
+    ? ["exec", "resume", ...LEAN_FLAGS, ...modelArgs, ...reasoningArgs, ...imageArgs, "-c", 'sandbox_mode="read-only"', request.threadId, "-"]
+    : ["exec", ...LEAN_FLAGS, ...(request.ephemeral ? ["--ephemeral"] : []), ...modelArgs, ...reasoningArgs, ...imageArgs, "--sandbox", "read-only", "-C", request.cwd, "-"];
 }
 
 export function buildCodexImageArgs(
