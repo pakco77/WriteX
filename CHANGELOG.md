@@ -2,6 +2,14 @@
 
 All notable public changes to WriteX are documented here.
 
+## 0.5.7 - 2026-08-18
+
+- Added GPT-style Chat attachments: choose files with the paperclip, drag them into the composer, or paste files from the clipboard.
+- Added removable pending-attachment chips and attachment cards in the conversation history, including image thumbnails and honest missing-file states.
+- Keeps attachments local to the current Vault and stages them only when sent; the writing prompt exposes only the files explicitly attached for that message.
+- Passes explicitly attached, signature-validated images to Codex through native `--image` input while keeping the Chat turn read-only and bounded.
+- Added attachment count, per-file, total-size, and empty-file validation before any Vault write.
+
 ## 0.5.6 - 2026-08-18
 
 - Made blocking image errors actionable: the preflight identifies the article image number, source, and a preview or explicit unavailable-image fallback before any external draft action.
