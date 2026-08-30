@@ -8,14 +8,15 @@ test("public README leads to a real 30-second install and keeps product capabili
   assert.match(readme, /## English/);
   assert.match(readme, /WriteX is an Obsidian-native writing workspace/);
   assert.match(readme, /create or update WeChat drafts only/);
+  assert.match(readme, /does not scan or learn from your Vault automatically/);
   assert.match(readme, /## AI 强化原创/);
   assert.doesNotMatch(readme, /## 让 AI 强化原创/);
   assert.match(readme, /## 30 秒安装 WriteX/);
   assert.ok(readme.indexOf("## 30 秒安装 WriteX") < readme.indexOf("## 它适合什么场景"));
   assert.doesNotMatch(readme, /## 30 秒开始/);
-  assert.match(readme, /\[WriteX v0\.5\.7\]\(https:\/\/github\.com\/pakco77\/WriteX\/releases\/tag\/0\.5\.7\)/);
+  assert.match(readme, /\[WriteX v0\.5\.8\]\(https:\/\/github\.com\/pakco77\/WriteX\/releases\/tag\/0\.5\.8\)/);
   assert.match(readme, /`main\.js`、`manifest\.json` 和 `styles\.css`/);
-  assert.match(readme, /社区目录正在审核/);
+  assert.match(readme, /GitHub Release 是当前可用的手动安装来源/);
   assert.doesNotMatch(readme, /尚未发布可下载安装包/);
   assert.doesNotMatch(readme, /使用 WorkBuddy，为什么还要装 CodeBuddy/);
   assert.doesNotMatch(readme, /### 在当前笔记里用 Agent/);
@@ -28,6 +29,10 @@ test("public README leads to a real 30-second install and keeps product capabili
   assert.match(readme, /自己的 Agent 订阅或 API 额度/);
   assert.match(readme, /会话历史/);
   assert.match(readme, /选题/);
+  assert.match(readme, /我的文风/);
+  assert.match(readme, /独立选题页/);
+  assert.match(readme, /对比替换/);
+  assert.match(readme, /Chat 附件与图片上下文/);
   assert.match(readme, /复制微信公众号格式/);
   assert.match(readme, /高级同步/);
   assert.match(readme, /!\[WriteX：Obsidian \+ Chat、图片集与预览\]\(docs\/images\/writex-product-overview-v2\.png\)/);

@@ -82,7 +82,7 @@ test("invalid persisted Agent and removed Luna model fall back visibly to Codex 
   assert.equal(settings.codexReasoningEffort, "");
 });
 
-test("v1 data migrates to v5 without losing Chat, assets, sessions, skills, feedback, Relay, or legacy render evidence", () => {
+test("v1 data migrates to v6 without losing Chat, assets, sessions, skills, feedback, Relay, or legacy render evidence", () => {
   const legacy = {
     version: 1,
     settings: { ...DEFAULT_SETTINGS, codexModel: "gpt-5.6-sol", relayUrl: "https://relay.example.com" },
@@ -114,7 +114,7 @@ test("v1 data migrates to v5 without losing Chat, assets, sessions, skills, feed
   };
 
   const migrated = migratePersistedData(legacy) as PersistedData;
-  assert.equal(migrated.version, 5);
+  assert.equal(migrated.version, 6);
   assert.deepEqual(migrated.topics, []);
   assert.equal(migrated.notes["a.md"].themeId, "moyu-green");
   assert.equal(migrated.notes["b.md"].themeId, "default");
@@ -128,7 +128,7 @@ test("v1 data migrates to v5 without losing Chat, assets, sessions, skills, feed
   assert.deepEqual(migrated.relayAccountBindings, legacy.relayAccountBindings);
 });
 
-test("v3 data migrates to v5 and preserves existing local topics", () => {
+test("v3 data migrates to v6 and preserves existing local topics", () => {
   const topic = {
     id: "topic-1",
     title: "一次模型更新，杀死了我的 AI App",
@@ -149,8 +149,40 @@ test("v3 data migrates to v5 and preserves existing local topics", () => {
     topics: [topic],
   });
 
-  assert.equal(migrated.version, 5);
+  assert.equal(migrated.version, 6);
   assert.deepEqual(migrated.topics, [{ ...topic, sourceKind: "chat" }]);
+});
+
+test("v2 data migrates independently to v6 without dropping notes or old topic fields", () => {
+  const migrated = migratePersistedData({
+    version: 2, settings: { codexModel: "gpt-5.6-sol" },
+    notes: { "old.md": { messages: [{ id: "m", role: "assistant", kind: "text", content: "保留", createdAt: 1 }], assets: [] } },
+    topics: [{ id: "t", title: "旧选题", content: "材料", status: "idea", createdAt: 1, updatedAt: 2 }],
+  });
+  assert.equal(migrated.version, 6);
+  assert.equal(migrated.notes["old.md"]?.messages[0]?.content, "保留");
+  assert.deepEqual(migrated.topics, [{ id: "t", title: "旧选题", content: "材料", status: "idea", createdAt: 1, updatedAt: 2, sourceKind: "chat" }]);
+});
+
+test("v5 data migrates to v6 with one optional writing style profile and untouched message history", () => {
+  const migrated = migratePersistedData({
+    version: 5, settings: DEFAULT_SETTINGS,
+    notes: { "a.md": { messages: [{ id: "m", role: "assistant", kind: "text", content: "保留", createdAt: 1 }], assets: [] } },
+    topics: [],
+  });
+  assert.equal(migrated.version, 6);
+  assert.equal(migrated.writingStyleProfile, undefined);
+  assert.equal(migrated.notes["a.md"]?.writingStyleEnabled, undefined);
+  assert.equal(migrated.notes["a.md"]?.messages[0]?.content, "保留");
+});
+
+test("v6 migration rejects an invalid optional style and normalizes a confirmed one", () => {
+  assert.equal(migratePersistedData({ version: 6, settings: DEFAULT_SETTINGS, notes: {}, topics: [], writingStyleProfile: { markdown: "" } }).writingStyleProfile, undefined);
+  const profile = migratePersistedData({
+    version: 6, settings: DEFAULT_SETTINGS, notes: {}, topics: [],
+    writingStyleProfile: { markdown: "保留判断。", sources: [{ kind: "note", filePath: "a.md", sourceHash: "x", capturedAt: 1, characterCount: 5, includedChars: 5 }], revision: 2, agent: "claude", model: "sonnet", createdAt: 1, updatedAt: 2 },
+  }).writingStyleProfile;
+  assert.deepEqual(profile, { markdown: "保留判断。", sources: [{ kind: "note", filePath: "a.md", sourceHash: "x", capturedAt: 1, characterCount: 5, includedChars: 5 }], revision: 2, agent: "claude", model: "sonnet", createdAt: 1, updatedAt: 2 });
 });
 
 test("v4 manual topics remain explicit without fabricated Chat identity", () => {
@@ -175,4 +207,32 @@ test("v4 manual topics remain explicit without fabricated Chat identity", () => 
   assert.deepEqual(migrated.topics, [topic]);
   assert.equal(migrated.topics[0]?.sourceMessageId, undefined);
   assert.equal(migrated.topics[0]?.sourceAgent, undefined);
+});
+
+test("every v1-v5 fixture retains persisted writing records and integrations while invalid optional v0.58 fields are ignored", () => {
+  const fixture = {
+    settings: { ...DEFAULT_SETTINGS, codexModel: "gpt-5.6-sol", relayUrl: "https://relay.example.com" },
+    notes: {
+      "完整.md": {
+        messages: [{ id: "message", role: "assistant", kind: "text", content: "回答", createdAt: 1, attachments: [{ id: "attachment", name: "a.png", filePath: "attachments/a.png", mimeType: "image/png", byteLength: 9, kind: "image" }], writingStyle: { revision: 1, sourceHash: "style" } }],
+        assets: [{ id: "image", filePath: "images/a.png", name: "a.png", mimeType: "image/png", source: "manual", createdAt: 2 }],
+        themeId: "moyu-green", agentSessions: { codex: "session" }, codexThreadId: "legacy", writingStyleEnabled: false,
+      },
+    },
+    topics: [{ id: "topic", title: "旧选题", content: "材料", sourceKind: "manual" as const, status: "done" as const, createdAt: 3, updatedAt: 4 }],
+    feedbackMemory: [{ messageId: "message", rating: "up" as const, createdAt: 5, agent: "codex" as const, requestChars: 1, responseChars: 2, paragraphCount: 1, listItemCount: 0 }],
+    relayAccountBindings: { relay: { relayUrl: "https://relay.example.com", accountId: "account", accountName: "公众号", verifiedAt: 6 } },
+    wechatImageCache: { image: { sourceSha256: "source", uploadSha256: "upload", url: "https://mmbiz.qpic.cn/a", accountId: "account", relayUrl: "https://relay.example.com", cachedAt: 7 } },
+  };
+  for (const version of [1, 2, 3, 4, 5]) {
+    const migrated = migratePersistedData({ version, ...structuredClone(fixture), writingStyleProfile: { markdown: 99 }, notes: { ...fixture.notes, "无效.md": { messages: [], assets: [], writingStyleEnabled: "yes" } } });
+    assert.equal(migrated.version, 6, `v${version}`);
+    assert.deepEqual(migrated.notes["完整.md"], fixture.notes["完整.md"], `v${version} note`);
+    assert.deepEqual(migrated.topics, fixture.topics, `v${version} topics`);
+    assert.deepEqual(migrated.feedbackMemory, fixture.feedbackMemory, `v${version} feedback`);
+    assert.deepEqual(migrated.relayAccountBindings, fixture.relayAccountBindings, `v${version} relay`);
+    assert.deepEqual(migrated.wechatImageCache, fixture.wechatImageCache, `v${version} WeChat cache`);
+    assert.equal(migrated.writingStyleProfile, undefined, `v${version} invalid style`);
+    assert.equal(migrated.notes["无效.md"]?.writingStyleEnabled, undefined, `v${version} invalid toggle`);
+  }
 });

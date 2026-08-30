@@ -24,6 +24,37 @@ export interface ChatSkillSnapshot {
   sourceHash: string;
 }
 
+export interface WritingStyleSourceRef {
+  kind: "note" | "selection";
+  filePath?: string;
+  sourceHash: string;
+  capturedAt: number;
+  characterCount: number;
+  includedChars: number;
+}
+
+export interface WritingStyleSkillExport {
+  path: string;
+  contentHash: string;
+  exportedAt: number;
+}
+
+export interface WritingStyleProfile {
+  markdown: string;
+  sources: WritingStyleSourceRef[];
+  revision: number;
+  agent: ChatAgentId;
+  model: string;
+  createdAt: number;
+  updatedAt: number;
+  lastSkillExport?: WritingStyleSkillExport;
+}
+
+export interface WritingStyleSnapshot {
+  revision: number;
+  sourceHash: string;
+}
+
 export interface ChatAttachment {
   id: string;
   name: string;
@@ -51,6 +82,7 @@ export interface ChatMessage {
   model?: string;
   reasoningEffort?: Exclude<CodexReasoningEffort, "">;
   skill?: ChatSkillSnapshot;
+  writingStyle?: WritingStyleSnapshot;
   feedback?: "up" | "down";
 }
 
@@ -209,6 +241,7 @@ export interface NoteState {
   previewMode?: "live" | "skill";
   skillRender?: SkillRenderResult;
   themeId?: string;
+  writingStyleEnabled?: boolean;
 }
 
 export interface AgentSettings {
@@ -236,13 +269,14 @@ export interface AgentSettings {
 }
 
 export interface PersistedData {
-  version: 5;
+  version: 6;
   settings: AgentSettings;
   notes: Record<string, NoteState>;
   topics: TopicIdea[];
   feedbackMemory?: ChatFeedbackMemoryEntry[];
   wechatImageCache?: Record<string, WeChatImageCacheEntry>;
   relayAccountBindings?: Record<string, RelayAccountBinding>;
+  writingStyleProfile?: WritingStyleProfile;
 }
 
 export interface WeChatImageCacheEntry {
@@ -311,12 +345,44 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function migrateWritingStyleProfile(value: unknown): WritingStyleProfile | undefined {
+  if (!isRecord(value) || typeof value.markdown !== "string" || !value.markdown.trim()) return undefined;
+  const sources = Array.isArray(value.sources) ? value.sources.filter(isRecord).flatMap(source => {
+    if ((source.kind !== "note" && source.kind !== "selection") || typeof source.sourceHash !== "string") return [];
+    return [{
+      kind: source.kind,
+      ...(typeof source.filePath === "string" && source.filePath ? { filePath: source.filePath } : {}),
+      sourceHash: source.sourceHash,
+      capturedAt: typeof source.capturedAt === "number" ? source.capturedAt : 0,
+      characterCount: typeof source.characterCount === "number" ? source.characterCount : 0,
+      includedChars: typeof source.includedChars === "number" ? source.includedChars : 0,
+    } satisfies WritingStyleSourceRef];
+  }) : [];
+  const agent: ChatAgentId = value.agent === "claude" || value.agent === "workbuddy" ? value.agent : "codex";
+  const lastSkillExport = isRecord(value.lastSkillExport) && typeof value.lastSkillExport.path === "string" && typeof value.lastSkillExport.contentHash === "string"
+    ? { path: value.lastSkillExport.path, contentHash: value.lastSkillExport.contentHash, exportedAt: typeof value.lastSkillExport.exportedAt === "number" ? value.lastSkillExport.exportedAt : 0 }
+    : undefined;
+  return {
+    markdown: value.markdown,
+    sources,
+    revision: typeof value.revision === "number" && value.revision > 0 ? Math.floor(value.revision) : 1,
+    agent,
+    model: typeof value.model === "string" ? value.model : "默认",
+    createdAt: typeof value.createdAt === "number" ? value.createdAt : 0,
+    updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : 0,
+    ...(lastSkillExport ? { lastSkillExport } : {}),
+  };
+}
+
 export function migratePersistedData(value: unknown): PersistedData {
   const source = isRecord(value) ? structuredClone(value) : {};
+  delete source.writingStyleProfile;
+  const rawWritingStyleProfile = isRecord(value) ? value.writingStyleProfile : undefined;
   const rawNotes = isRecord(source.notes) ? source.notes : {};
   const notes: Record<string, NoteState> = {};
   for (const [path, rawNote] of Object.entries(rawNotes)) {
     const note = isRecord(rawNote) ? rawNote : {};
+    const { writingStyleEnabled: rawWritingStyleEnabled, ...noteWithoutWritingStyleEnabled } = note;
     const legacyRender = isRecord(note.skillRender) ? note.skillRender : undefined;
     const inferredTheme = typeof note.themeId === "string" && note.themeId.trim()
       ? note.themeId
@@ -324,10 +390,11 @@ export function migratePersistedData(value: unknown): PersistedData {
         ? legacyRender.themeId
         : "default";
     notes[path] = {
-      ...note,
+      ...noteWithoutWritingStyleEnabled,
       messages: Array.isArray(note.messages) ? note.messages as ChatMessage[] : [],
       assets: Array.isArray(note.assets) ? note.assets as ImageAsset[] : [],
       themeId: inferredTheme,
+      ...(typeof rawWritingStyleEnabled === "boolean" ? { writingStyleEnabled: rawWritingStyleEnabled } : {}),
     } as NoteState;
   }
   const topics = Array.isArray(source.topics)
@@ -336,15 +403,17 @@ export function migratePersistedData(value: unknown): PersistedData {
       sourceKind: topic.sourceKind === "manual" ? "manual" : "chat",
     })) as unknown as TopicIdea[]
     : [];
+  const writingStyleProfile = migrateWritingStyleProfile(rawWritingStyleProfile);
   return {
     ...source,
-    version: 5,
+    version: 6,
     settings: migrateSettings(isRecord(source.settings) ? source.settings as Partial<AgentSettings> : undefined),
     notes,
     topics,
     feedbackMemory: Array.isArray(source.feedbackMemory) ? source.feedbackMemory as ChatFeedbackMemoryEntry[] : [],
     wechatImageCache: isRecord(source.wechatImageCache) ? source.wechatImageCache as Record<string, WeChatImageCacheEntry> : {},
     relayAccountBindings: isRecord(source.relayAccountBindings) ? source.relayAccountBindings as Record<string, RelayAccountBinding> : {},
+    ...(writingStyleProfile ? { writingStyleProfile } : {}),
   };
 }
 

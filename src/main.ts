@@ -13,9 +13,9 @@ import {
 } from "obsidian";
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rm } from "node:fs/promises";
-import { basename, join } from "node:path";
-import { CodexImageUnavailableError, CodexRuntime, preserveSelectionWhitespace } from "./codex";
+import { link, mkdir, open, readFile, rm, stat } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
+import { CodexImageUnavailableError, CodexRuntime } from "./codex";
 import { ChatAgentRuntime } from "./chatAgents";
 import { archiveActiveConversation, restoreArchivedConversation } from "./conversations";
 import { buildMarkdownBlockInsertion } from "./chatBlocks";
@@ -34,6 +34,10 @@ import { ThemeService } from "./themeService";
 import { ThemeStore } from "./themeStore";
 import { buildThemeCompilePrompt, type ThemeCompileSource } from "./themeCompiler";
 import { AgentView, VIEW_TYPE, WRITEX_ICON } from "./view";
+import { TopicLibraryView, TOPIC_LIBRARY_VIEW_TYPE } from "./topicLibraryView";
+import { WRITING_STYLE_SKILL_PATH, buildStyleExtractionPrompt, renderStyleSkill, sha256Text } from "./writingStyle";
+import { allocateWritingStyleSources, exportStyleSkillTransaction, persistWritingStyleProfile, replaceCapturedRange, routeTopicToChat, withIsolatedStyleExtractionCwd } from "./writingStyleController";
+import { cleanAssistantMarkdown as normalizeAssistantMarkdown, computeSelectionReplacement as computeFinalSelectionReplacement } from "./selectionReplacement";
 import { extractMarkdownImageSources } from "./wechat";
 import {
   deleteTopicRecord,
@@ -63,6 +67,8 @@ import {
   type SelectionContext,
   type RelayAccountBinding,
   type TopicIdea,
+  type WritingStyleProfile,
+  type WritingStyleSourceRef,
   type WeChatImageCacheEntry,
 } from "./types";
 
@@ -97,7 +103,7 @@ export type AssistantDropTarget =
   | { kind: "rejected"; reason: string };
 
 export default class ObsidianAgentPlugin extends Plugin {
-  data: PersistedData = { version: 5, settings: { ...DEFAULT_SETTINGS }, notes: {}, topics: [] };
+  data: PersistedData = { version: 6, settings: { ...DEFAULT_SETTINGS }, notes: {}, topics: [] };
   runtime = new CodexRuntime(() => this.data.settings.codexPath);
   chatRuntime = new ChatAgentRuntime(this.runtime, () => this.data.settings);
   themeService!: ThemeService;
@@ -124,12 +130,18 @@ export default class ObsidianAgentPlugin extends Plugin {
     await this.themeService.initialize();
     this.themeService.bootstrapStarterThemes();
     this.registerView(VIEW_TYPE, leaf => new AgentView(leaf, this));
+    this.registerView(TOPIC_LIBRARY_VIEW_TYPE, leaf => new TopicLibraryView(leaf, this));
     this.addRibbonIcon(WRITEX_ICON, "打开 WriteX", () => void this.activateView());
 
     this.addCommand({
       id: "open-agent",
       name: "打开 Agent 面板",
       callback: () => void this.activateView(),
+    });
+    this.addCommand({
+      id: "open-topic-library",
+      name: "打开 WriteX 选题库",
+      callback: () => void this.activateTopicLibrary(),
     });
     this.addCommand({
       id: "send-selection-to-chat",
@@ -191,6 +203,173 @@ export default class ObsidianAgentPlugin extends Plugin {
     if (view && context) view.setSelectionContext(context);
     else view?.syncActiveNote();
     return view;
+  }
+
+  async activateTopicLibrary(focusedTopicId = "", candidateTargetPath?: string): Promise<TopicLibraryView | null> {
+    let leaf = this.app.workspace.getLeavesOfType(TOPIC_LIBRARY_VIEW_TYPE)[0];
+    if (!leaf) {
+      leaf = this.app.workspace.getLeaf("tab");
+      await leaf.setViewState({ type: TOPIC_LIBRARY_VIEW_TYPE, active: true });
+    }
+    this.app.workspace.revealLeaf(leaf);
+    const view = leaf.view instanceof TopicLibraryView ? leaf.view : null;
+    view?.setActivation({ focusedTopicId, candidateTargetPath });
+    return view;
+  }
+
+  async continueTopicToChat(topicId: string, targetPath: string): Promise<boolean> {
+    const topic = this.findTopicById(topicId);
+    const target = this.app.vault.getAbstractFileByPath(targetPath);
+    if (!topic) throw new Error("这条选题已经不存在。");
+    if (!(target instanceof TFile) || target.extension !== "md") throw new Error("“继续到”笔记已移动或删除，请重新选择。");
+    const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    if (existing instanceof AgentView && existing.hasComposerDraft()) return false;
+    return routeTopicToChat({
+      hasDraft: () => existing instanceof AgentView && existing.hasComposerDraft(),
+      openTarget: async () => {
+        const targetLeaf = this.app.workspace.getLeaf("tab");
+        await targetLeaf.openFile(target);
+      },
+      activateChat: async () => this.activateView().then(view => view ? { prepare: () => view.prepareTopicDraft(topic) } : null),
+    });
+  }
+
+  async setWritingStyleEnabled(notePath: string, enabled: boolean): Promise<void> {
+    const state = this.getNoteState(notePath);
+    const previous = state.writingStyleEnabled;
+    state.writingStyleEnabled = enabled;
+    try { await this.persist(); }
+    catch (error) {
+      if (previous === undefined) delete state.writingStyleEnabled;
+      else state.writingStyleEnabled = previous;
+      throw error;
+    }
+  }
+
+  async saveWritingStyleProfile(profile: WritingStyleProfile): Promise<void> {
+    await persistWritingStyleProfile({
+      state: this.data,
+      profile,
+      persist: () => this.persist(),
+      refreshViews: () => {
+        for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+          if (leaf.view instanceof AgentView) leaf.view.refreshWritingStyle();
+        }
+      },
+    });
+  }
+
+  async extractWritingStyle(sources: Array<{ kind: "note" | "selection"; filePath?: string; content: string }>): Promise<{ markdown: string; sources: WritingStyleSourceRef[]; agent: import("./types").ChatAgentId; model: string }> {
+    if (!sources.length) throw new Error("请至少选择一篇代表作或当前选段。");
+    const captured = allocateWritingStyleSources(sources, this.data.settings.maxContextChars, Date.now, sha256Text)
+      .filter(source => source.content.length);
+    if (!captured.length) throw new Error("代表作内容为空或上下文预算为 0。");
+    const agent = this.data.settings.activeChatAgent;
+    const model = agent === "codex" ? this.data.settings.codexModel : agent === "claude" ? this.data.settings.claudeModel : this.data.settings.workbuddyModel;
+    const result = await withIsolatedStyleExtractionCwd(cwd => this.chatRuntime.runNoToolOneShot({
+      agent,
+      cwd,
+      prompt: buildStyleExtractionPrompt(captured),
+      model,
+      reasoningEffort: agent === "codex" ? this.data.settings.codexReasoningEffort || undefined : undefined,
+    }));
+    return { markdown: result.text, sources: captured.map(({ content: _content, ...source }) => source), agent, model: model || "默认" };
+  }
+
+  async exportWritingStyleSkill(): Promise<void> {
+    const profile = this.data.writingStyleProfile;
+    if (!profile) throw new Error("请先确认一份我的文风档案。");
+    const relativePath = WRITING_STYLE_SKILL_PATH;
+    const absolutePath = join(this.getVaultBasePath(), relativePath);
+    const content = renderStyleSkill(profile);
+    const previous = profile.lastSkillExport;
+    const next = { path: relativePath, contentHash: sha256Text(content), exportedAt: Date.now() };
+    const transactionId = randomUUID();
+    const recoveryDirectory = join(this.getVaultBasePath(), ".writex-recovery", transactionId);
+    await exportStyleSkillTransaction({
+      adapter: {
+        identity: async path => stat(path, { bigint: true })
+          .then(file => ({ owner: `${file.dev}:${file.ino}`, version: `${file.ctimeNs}:${file.size}` }))
+          .catch(error => (error as NodeJS.ErrnoException).code === "ENOENT" ? undefined : Promise.reject(error)),
+        prepareRecoveryDirectory: async path => {
+          await mkdir(dirname(path), { recursive: true });
+          await mkdir(path, { mode: 0o700 });
+        },
+        prepareTargetParent: async path => { await mkdir(dirname(path), { recursive: true }); },
+        writeExclusive: async (path, value) => {
+          const file = await open(path, "wx", 0o600);
+          try {
+            await file.writeFile(value, "utf8"); await file.sync();
+            const written = await file.stat({ bigint: true });
+            return { owner: `${written.dev}:${written.ino}`, version: `${written.ctimeNs}:${written.size}` };
+          }
+          finally { await file.close(); }
+        },
+        linkNoReplace: async (from, to) => {
+          try { await link(from, to); return { linked: true }; }
+          catch (error) { return { linked: false, error }; }
+        },
+        updateExisting: async ({ path, backupPath, content, previousExportHash, hash }) => {
+          let file;
+          try { file = await open(path, "r+"); }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return { exists: false, updated: false };
+            return { exists: true, updated: false, error };
+          }
+          let backup: import("./writingStyleController").StyleFileIdentity | undefined;
+          try {
+            const beforeStat = await file.stat({ bigint: true });
+            const beforeIdentity = { owner: `${beforeStat.dev}:${beforeStat.ino}`, version: `${beforeStat.ctimeNs}:${beforeStat.size}` };
+            const before = Buffer.from(await file.readFile()).toString("utf8");
+            const pathBefore = await stat(path, { bigint: true });
+            if (`${pathBefore.dev}:${pathBefore.ino}` !== beforeIdentity.owner || `${pathBefore.ctimeNs}:${pathBefore.size}` !== beforeIdentity.version) {
+              return { exists: true, updated: false, error: new Error("本地 Skill 在更新前已变化") };
+            }
+            if (!previousExportHash || hash(before) !== previousExportHash) {
+              return { exists: true, updated: false, error: new Error("本地 Skill 已被手动修改，WriteX 不会覆盖。请先在外部处理冲突。") };
+            }
+            const recovery = await open(backupPath, "wx", 0o600);
+            try {
+              await recovery.writeFile(before, "utf8"); await recovery.sync();
+              const written = await recovery.stat({ bigint: true });
+              backup = { owner: `${written.dev}:${written.ino}`, version: `${written.ctimeNs}:${written.size}` };
+            } finally { await recovery.close(); }
+            const beforeWrite = await file.stat({ bigint: true });
+            const pathBeforeWrite = await stat(path, { bigint: true });
+            if (`${beforeWrite.dev}:${beforeWrite.ino}` !== beforeIdentity.owner || `${beforeWrite.ctimeNs}:${beforeWrite.size}` !== beforeIdentity.version
+              || `${pathBeforeWrite.dev}:${pathBeforeWrite.ino}` !== beforeIdentity.owner || `${pathBeforeWrite.ctimeNs}:${pathBeforeWrite.size}` !== beforeIdentity.version) {
+              return { exists: true, updated: false, backup, error: new Error("本地 Skill 在写入前已变化，旧字节已保留") };
+            }
+            const bytes = Buffer.from(content, "utf8");
+            await file.truncate(0);
+            await file.write(bytes, 0, bytes.length, 0);
+            await file.truncate(bytes.length);
+            await file.sync();
+            const written = await file.stat({ bigint: true });
+            const target = await stat(path, { bigint: true });
+            const targetIdentity = { owner: `${target.dev}:${target.ino}`, version: `${target.ctimeNs}:${target.size}` };
+            if (`${written.dev}:${written.ino}` !== beforeIdentity.owner || targetIdentity.owner !== beforeIdentity.owner || await readFile(path, "utf8") !== content) {
+              return { exists: true, updated: false, backup, error: new Error("本地 Skill 路径已被外部替换，旧字节已保留") };
+            }
+            return { exists: true, updated: true, backup, target: targetIdentity };
+          } catch (error) {
+            return { exists: true, updated: false, backup, error };
+          } finally { await file.close(); }
+        },
+      },
+      path: absolutePath,
+      tempPath: join(recoveryDirectory, "candidate.SKILL.md"),
+      backupPath: join(recoveryDirectory, "previous.SKILL.md"),
+      recoveryDirectory,
+      content,
+      previousExportHash: previous?.contentHash,
+      hash: sha256Text,
+      persist: async () => {
+        profile.lastSkillExport = next;
+        try { await this.persist(); }
+        catch (error) { profile.lastSkillExport = previous; throw error; }
+      },
+    });
   }
 
   openSettings(): void {
@@ -523,21 +702,15 @@ export default class ObsidianAgentPlugin extends Plugin {
     if (view instanceof AgentView) view.setSelectionContext(context, false);
   }
 
-  async replaceOriginalSelection(context: SelectionContext, markdown: string): Promise<void> {
+  async replaceOriginalSelection(context: SelectionContext, replacement: string): Promise<void> {
     const view = this.findMarkdownView(context.filePath);
     if (!view) throw new Error("请先打开原笔记，再替换选中文字。");
     const editor = view.editor;
-    const replacement = preserveSelectionWhitespace(context.text, cleanAssistantMarkdown(markdown));
-    const current = editor.getSelection();
-    if (current === context.text) {
-      editor.replaceSelection(replacement);
-      editor.focus();
-      return;
-    }
-    const original = editor.getRange(context.from, context.to);
-    if (original !== context.text) throw new Error("原选区已经变化，请重新划词后再替换。");
-    editor.replaceRange(replacement, context.from, context.to);
-    editor.focus();
+    replaceCapturedRange(editor, context, replacement);
+  }
+
+  computeSelectionReplacement(context: SelectionContext, markdown: string): string {
+    return computeFinalSelectionReplacement(context.text, markdown);
   }
 
   async insertAtCursor(filePath: string, markdown: string): Promise<void> {
@@ -592,7 +765,7 @@ export default class ObsidianAgentPlugin extends Plugin {
     try {
       for (const file of files) {
         const bytes = await file.arrayBuffer();
-        if (!bytes.byteLength || bytes.byteLength > CHAT_ATTACHMENT_MAX_BYTES) throw new Error(`“${file.name || "未命名附件"}”不符合附件大小限制。`);
+        if (!bytes.byteLength || bytes.byteLength > CHAT_ATTACHMENT_MAX_BYTES) throw new Error(`“${file.name || "未命名附件"}”无法作为 Chat 上下文保存。`);
         const inspected = inspectImage(bytes, { fileName: file.name, declaredMime: file.type });
         if (file.type.startsWith("image/") && (!inspected.mimeType || !inspected.complete)) {
           throw new Error(`“${file.name || "未命名图片"}”无法通过文件签名确认图片完整性。`);
@@ -604,8 +777,8 @@ export default class ObsidianAgentPlugin extends Plugin {
         while (this.app.vault.getAbstractFileByPath(candidate)) {
           const dot = originalName.lastIndexOf(".");
           const stem = dot > 0 ? originalName.slice(0, dot) : originalName;
-          const ext = dot > 0 ? originalName.slice(dot) : "";
-          candidate = normalizePath(`${folder}/${stem}-${suffix}${ext}`);
+          const extension = dot > 0 ? originalName.slice(dot) : "";
+          candidate = normalizePath(`${folder}/${stem}-${suffix}${extension}`);
           suffix += 1;
         }
         await this.app.vault.createBinary(candidate, bytes);
@@ -1318,9 +1491,7 @@ class AgentSettingTab extends PluginSettingTab {
 }
 
 function cleanAssistantMarkdown(value: string): string {
-  const trimmed = value.trim();
-  const fenced = trimmed.match(/^```(?:markdown|md|text)?\s*\n([\s\S]*?)\n```$/i);
-  return fenced ? fenced[1].trim() : trimmed;
+  return normalizeAssistantMarkdown(value);
 }
 
 function safeSegment(value: string): string {
@@ -1328,8 +1499,8 @@ function safeSegment(value: string): string {
 }
 
 function chatAttachmentName(value: string): string {
-  const name = safeSegment(value).slice(0, 160);
-  return name && name !== "." && name !== ".." ? name : "attachment";
+	const name = safeSegment(value).slice(0, 160);
+	return name && name !== "." && name !== ".." ? name : "attachment";
 }
 
 function imageExtension(mimeType: string, name: string): string {

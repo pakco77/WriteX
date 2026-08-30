@@ -46,6 +46,30 @@ export function sortTopicsNewestFirst(topics: TopicIdea[]): TopicIdea[] {
   return [...topics].sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+export function sortTopicsByCreatedAt(topics: TopicIdea[]): TopicIdea[] {
+  return [...topics].sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export type TopicTimeGroup = "今天" | "本周" | "更早";
+
+export function topicTimeGroup(createdAt: number, now: number = Date.now()): TopicTimeGroup {
+  const current = new Date(now);
+  const date = new Date(createdAt);
+  const startOfToday = new Date(current.getFullYear(), current.getMonth(), current.getDate()).getTime();
+  if (date.getTime() >= startOfToday) return "今天";
+  const weekday = (current.getDay() + 6) % 7;
+  const startOfWeek = startOfToday - weekday * 86_400_000;
+  return date.getTime() >= startOfWeek ? "本周" : "更早";
+}
+
+export function groupTopicsByCreatedAt(topics: TopicIdea[], now: number = Date.now()): Array<{ label: TopicTimeGroup; topics: TopicIdea[] }> {
+  const grouped = new Map<TopicTimeGroup, TopicIdea[]>([["今天", []], ["本周", []], ["更早", []]]);
+  for (const topic of sortTopicsByCreatedAt(topics)) grouped.get(topicTimeGroup(topic.createdAt, now))!.push(topic);
+  return (["今天", "本周", "更早"] as const)
+    .map(label => ({ label, topics: grouped.get(label)! }))
+    .filter(group => group.topics.length);
+}
+
 export function createManualTopic(
   topics: TopicIdea[],
   title: string,

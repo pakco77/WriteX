@@ -11,6 +11,8 @@ import {
   renameTopicRecord,
   sampleCutLenses,
   saveMessageAsTopic,
+  groupTopicsByCreatedAt,
+  sortTopicsByCreatedAt,
   sortTopicsNewestFirst,
 } from "../src/topics.ts";
 import type { ChatMessage, TopicIdea } from "../src/types.ts";
@@ -63,6 +65,19 @@ test("topic lookup and compact library ordering stay local and newest-first", ()
   assert.equal(findTopicBySourceMessage(topics, "message-2")?.id, "newer");
   assert.deepEqual(sortTopicsNewestFirst(topics).map(topic => topic.id), ["newer", "older"]);
   assert.deepEqual(topics.map(topic => topic.id), ["older", "newer"]);
+});
+
+test("topic library groups and orders by immutable record time, not rename time", () => {
+  const topics = [
+    { id: "old", title: "旧", content: "旧", sourceKind: "manual" as const, createdAt: Date.parse("2026-08-20T10:00:00+08:00"), updatedAt: Date.parse("2026-08-29T10:00:00+08:00") },
+    { id: "week", title: "本周", content: "本周", sourceKind: "manual" as const, createdAt: Date.parse("2026-08-25T10:00:00+08:00"), updatedAt: 0 },
+    { id: "today", title: "今天", content: "今天", sourceKind: "manual" as const, createdAt: Date.parse("2026-08-29T09:00:00+08:00"), updatedAt: 0 },
+  ];
+  const now = Date.parse("2026-08-29T12:00:00+08:00");
+  assert.deepEqual(sortTopicsByCreatedAt(topics).map(topic => topic.id), ["today", "week", "old"]);
+  assert.deepEqual(groupTopicsByCreatedAt(topics, now).map(group => [group.label, group.topics.map(topic => topic.id)]), [
+    ["今天", ["today"]], ["本周", ["week"]], ["更早", ["old"]],
+  ]);
 });
 
 test("manual topics validate Unicode length and keep optional note provenance", () => {

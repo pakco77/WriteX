@@ -1,8 +1,8 @@
 {
   "name": "writex",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "private": true,
-  "description": "AI 强化原创写作工作台：在 Obsidian 内用本地 Agent（Codex/Claude/WorkBuddy）协助整理、改写与优化，只做微信公众号草稿创建/更新。",
+  "description": "AI 增强原创写作工作台：调用本地 Agent（Codex/Claude/WorkBuddy）协助整理、改写与优化，只做微信公众号草稿创建/更新。",
   "license": "AGPL-3.0-only",
   "main": "main.js",
   "type": "module",

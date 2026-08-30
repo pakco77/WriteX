@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   CHAT_ATTACHMENT_MAX_BYTES,
   CHAT_ATTACHMENT_MAX_COUNT,
+  CHAT_ATTACHMENT_TOTAL_MAX_BYTES,
   validateChatAttachmentInputs,
 } from "../src/chatAttachments.ts";
 

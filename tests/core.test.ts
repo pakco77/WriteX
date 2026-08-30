@@ -13,10 +13,13 @@ import {
 import {
   AGENT_MODELS,
   buildExternalAgentArgs,
+  buildExternalAgentNoToolArgs,
+  parseClaudeNoToolCapabilities,
   parseExternalAgentJson,
 } from "../src/chatAgents.ts";
 import {
   buildCodexArgs,
+  buildCodexNoToolArgs,
   buildCodexImageArgs,
   buildCodexImagePrompt,
   buildWritingPrompt,
@@ -33,6 +36,8 @@ import {
   resolveGeneratedProvider,
 } from "../src/imageRouting.ts";
 import { canRegenerateImage, ensureOriginalAssetPairs, type ImageAsset } from "../src/types.ts";
+import { buildStyleExtractionPrompt, buildStyleInstruction, renderStyleSkill, sha256Text, styleEnabled } from "../src/writingStyle.ts";
+import { buildBoundedTextDiff } from "../src/selectionDiff.ts";
 import { extractMarkdownImageSources, markdownToPlainText } from "../src/wechat.ts";
 import {
   buildSkillInstallArgs,
@@ -57,7 +62,8 @@ test("v0.4 creator loop keeps selection, keyboard, concurrent image, feedback, a
   ]);
 
   assert.match(main, /registerDomEvent\(document,\s*"mouseup"/);
-  assert.match(view, /"替换原选区"/);
+  assert.match(view, /"对比替换"/);
+  assert.match(view, /SelectionCompareModal/);
   assert.match(view, /event\.key === "Enter" && !event\.shiftKey && !event\.isComposing/);
   assert.match(types, /"manual" \| "original" \| "optimized"/);
   assert.match(main, /ensureOriginalAssetPairs/);
@@ -371,6 +377,26 @@ test("external Agent adapters use distinct real CLIs, models, sessions, and read
   assert.deepEqual(AGENT_MODELS.workbuddy.map(option => option.value), [""]);
 });
 
+test("writing-style extraction uses a dedicated no-tool one-shot path for all Agents", () => {
+  const codex = buildCodexNoToolArgs({ cwd: "/tmp/writex-style-isolated", model: "gpt-5.6-sol" });
+  for (const feature of ["shell_tool", "browser_use", "browser_use_external", "browser_use_full_cdp_access", "computer_use", "image_generation", "in_app_browser", "multi_agent", "view_image", "web_search_request"]) {
+    assert.equal(codex.includes(feature), true, `${feature} must be disabled for style extraction`);
+  }
+  assert.equal(codex.includes("--ephemeral"), true);
+  assert.equal(codex[codex.indexOf("--sandbox") + 1], "read-only");
+  assert.equal(codex[codex.indexOf("-C") + 1], "/tmp/writex-style-isolated");
+  const workbuddy = buildExternalAgentNoToolArgs("workbuddy", { prompt: "只总结已嵌入的文字", model: "default" });
+  assert.deepEqual(workbuddy.slice(0, 8), ["-p", "--output-format", "json", "--tools", "", "--strict-mcp-config", "--no-session-persistence", "--setting-sources"]);
+  assert.equal(workbuddy[workbuddy.indexOf("--setting-sources") + 1], "");
+  assert.equal(workbuddy.includes("Read"), false);
+  const supportedClaude = parseClaudeNoToolCapabilities({ code: 0, stdout: "--tools <value>\n--strict-mcp-config\n--no-session-persistence\n--setting-sources <sources>" });
+  assert.equal(supportedClaude.supported, true);
+  assert.equal(buildExternalAgentNoToolArgs("claude", { prompt: "只总结已嵌入的文字", model: "default" }, supportedClaude).includes("--tools"), true);
+  assert.deepEqual(parseClaudeNoToolCapabilities({ code: 0, stdout: "--tools <value>\n--strict-mcp-config" }).missing, ["--no-session-persistence", "--setting-sources"]);
+  assert.equal(parseClaudeNoToolCapabilities({ code: 126, stdout: "", stderr: "permission denied" }).supported, false);
+  assert.throws(() => buildExternalAgentNoToolArgs("claude", { prompt: "只总结已嵌入的文字", model: "default" }), /无法确认 Claude CLI 的无工具能力/);
+});
+
 test("Claude-like JSON output keeps the real session and rejects empty responses", () => {
   assert.deepEqual(parseExternalAgentJson(JSON.stringify({ result: "改写结果", session_id: "session-1" })), {
     text: "改写结果",
@@ -574,6 +600,35 @@ test("writing prompt includes only the explicitly selected Skill instruction", (
   assert.match(prompt, /Skill 名称：human-writing/);
   assert.match(prompt, /允许读取显式启用的 Skill/);
   assert.doesNotMatch(prompt, /不要调用工具/);
+});
+
+test("writing prompt keeps confirmed personal style separate from the selected task Skill", () => {
+  const style = buildStyleInstruction({ markdown: "## 叙述节奏\n保留停顿。", sources: [], revision: 2, agent: "codex", model: "gpt-5.6-sol", createdAt: 1, updatedAt: 2 });
+  const prompt = buildWritingPrompt({
+    request: "改写", filePath: "文章.md", noteContent: "正文", maxContextChars: 100,
+    skillInstruction: "Skill 名称：human-writing", styleInstruction: style,
+  });
+  assert.match(prompt, /我的文风（已确认档案 v2/);
+  assert.match(prompt, /Skill 名称：human-writing/);
+  assert.match(prompt, /当前用户要求、事实材料和明确格式约束优先/);
+});
+
+test("writing style is opt-in per note, records a compact snapshot, and exports only confirmed text", () => {
+  const profile = { markdown: "## 结构习惯\n从现场进入。", sources: [], revision: 3, agent: "claude" as const, model: "sonnet", createdAt: 1, updatedAt: 2 };
+  assert.equal(styleEnabled(profile, undefined), true);
+  assert.equal(styleEnabled(profile, false), false);
+  assert.equal(styleEnabled(undefined, true), false);
+  assert.equal(sha256Text(profile.markdown).length, 64);
+  assert.match(renderStyleSkill(profile), /# 我的文风/);
+  assert.match(buildStyleExtractionPrompt([{ kind: "selection", sourceHash: "a".repeat(64), capturedAt: 1, characterCount: 8, includedChars: 4, content: "一段代表作" }]), /作者立场与说话位置/);
+});
+
+test("bounded local text diff preserves Chinese punctuation and degrades safely for long input", () => {
+  const diff = buildBoundedTextDiff("我，停一下。", "我，真的停一下。", 100);
+  assert.equal(diff.truncated, false);
+  assert.equal(diff.parts.some(part => part.kind === "added" && part.text === "真的"), true);
+  const long = buildBoundedTextDiff("原".repeat(101), "新".repeat(101), 100);
+  assert.equal(long.truncated, true);
 });
 
 test("Plan mode asks Codex for a decision-ready plan instead of a finished draft", () => {

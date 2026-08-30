@@ -2,7 +2,7 @@
 
 ## English
 
-WriteX is an Obsidian-native writing workspace for WeChat creators. Your Markdown note remains the source of truth while you use Codex, Claude, or WorkBuddy to develop material, generate images, preview WeChat layouts, and create or update WeChat drafts only. It never publishes or mass-sends on your behalf.
+WriteX is an Obsidian-native writing workspace for WeChat creators. Your Markdown note remains the source of truth while you use Codex, Claude, or WorkBuddy to develop material, generate images, preview WeChat layouts, and create or update WeChat drafts only. It never publishes or mass-sends on your behalf. Its optional style profile is created only from representative work you explicitly select; it does not scan or learn from your Vault automatically.
 
 ## 中文
 
@@ -32,7 +32,7 @@ WriteX 直接调用你本地的 Agent，共用现有的 AI 订阅额度，不额
 <summary>查看文字安装路径</summary>
 
 
-1. 从 [WriteX v0.5.7](https://github.com/pakco77/WriteX/releases/tag/0.5.7) 下载 `main.js`、`manifest.json` 和 `styles.css`。
+1. 从 [WriteX v0.5.8](https://github.com/pakco77/WriteX/releases/tag/0.5.8) 下载 `main.js`、`manifest.json` 和 `styles.css`。
 2. 将三份文件放进 `<你的 Vault>/.obsidian/plugins/writex/`；从旧版 `obsidian-agent` 迁移时，保留旧目录和数据，并只启用 `writex`。
 3. 重启 Obsidian，在 `设置 → 第三方插件` 启用 WriteX，然后打开一篇笔记，从右侧栏进入。
 
@@ -43,7 +43,7 @@ WriteX 直接调用你本地的 Agent，共用现有的 AI 订阅额度，不额
 WriteX 需要 Obsidian 1.11.4 或更高版本。
 
 
-当前可用的手动安装包是 [v0.5.7 GitHub Release](https://github.com/pakco77/WriteX/releases/tag/0.5.7)，仅含上面三份文件：
+当前可用的手动安装包是 [v0.5.8 GitHub Release](https://github.com/pakco77/WriteX/releases/tag/0.5.8)，仅含上面三份文件：
 
 
 ```text
@@ -51,7 +51,7 @@ WriteX 需要 Obsidian 1.11.4 或更高版本。
 ```
 
 
-然后在第三方插件中启用 WriteX。社区目录正在审核；审核通过并公开前，上方图片展示的是未来的目录入口，不是当前可点击入口。
+然后在第三方插件中启用 WriteX。GitHub Release 是当前可用的手动安装来源；Obsidian Community 条目可能仍显示较早的审核版本，请以客户端实际显示版本为准。
 
 
 ## 它适合什么场景
@@ -75,39 +75,9 @@ WriteX 需要 Obsidian 1.11.4 或更高版本。
 
 ## 核心功能
 
-
-- **Skill 创作**：在 Chat 中选择 Vault Skill，用于文字创作与图片生成；也可以直接在 Chat 中生成图片。
-- **三种 Agent**：支持 Codex、Claude 和 WorkBuddy。调用使用你自己的 Agent 订阅或 API 额度，不消耗 WriteX 积分。
-- **历史与选题**：保留各 Agent 的会话历史，把值得继续写的回复一键收为选题。
-- **图片集与预览**：管理正文图片和排版主题，用固定手机视图检查最终效果。
-- **公众号交付**：可一键复制微信公众号格式；也可使用高级同步，一键创建或更新草稿，执行前仍需确认。
-- **本地优先**：Markdown 正文留在 Vault；Agent、同步路线和图片能力都由用户明确选择，不静默回退。
-
-
-## 两条公众号同步路线
-
-
-| 路线 | 适合谁 | WriteX 积分 |
-| --- | --- | ---: |
-| 用户自建 Relay | 已有固定 IP，希望自己保管公众号凭据 | 0 |
-| Write Cloud 免费体验 | 不想先部署服务器，想直接验证完整流程 | 首次符合条件的公众号赠送 8 分；成功同步 1 分 |
-
-
-两条路线彼此独立，不会自动切换。
-
-
-## 数据安全
-
-
-- **正文归 Obsidian**：Markdown 笔记始终是唯一编辑源。
-- **凭据不进普通配置**：Relay Key、图片 API Key 和 Write Cloud 匿名设备凭据保存在 Obsidian SecretStorage，不写进 `data.json`。
-- **真实写入前必确认**：同步前明确显示目标、内容、创建或更新、费用和余额变化。
-- **自建路线不收费**：用户自建 Relay 永远消耗 0 WriteX 积分。
-- **没有客户端遥测**：本地点赞或点踩只保存结构偏好，不上传历史正文。
-
-
-## 核心功能
-
+- **我的文风**：只从你显式选择的代表作提炼一份 Vault 本地档案；按笔记开关，可与当前任务 Skill 同时使用，不会自动扫描或持续学习。
+- **独立选题页**：选题以主编辑区页签、按记录时间分组的卡片呈现；选择目标笔记后只预填 Chat，不会自动发送、建稿或改变写作设置。
+- **对比替换**：划词改写先展示原文与建议的本地差异；只有明确“应用建议”且原选区未变，才执行一次编辑器替换。
 - **Chat 附件与图片上下文**：用回形针选择文件、拖入 Chat 或从剪贴板粘贴；发送前可移除，发送后在消息中保留图片缩略图或文件卡片。
 - **本地附件边界**：附件只在发送时复制到当前 Vault，每次最多 10 个、单文件 20 MB、总量 50 MB；提示词只暴露本条消息明确附上的文件。
 - **Skill 创作**：在 Chat 中选择 Vault Skill，用于文字创作与图片生成；也可以直接在 Chat 中生成图片。
@@ -129,6 +99,7 @@ WriteX 需要 Obsidian 1.11.4 或更高版本。
 ## 数据安全
 
 - **正文归 Obsidian**：Markdown 笔记始终是唯一编辑源。
+- **文风需明确确认**：代表作只在你发起提炼时交给当前选择的 Agent；确认前不会保存候选，导出本地 Skill 也需要单独确认。
 - **附件留在本地**：Chat 附件写入当前 Vault 的消息附件目录，不自动进入文章正文、图片集或远程 Relay/Cloud。
 - **凭据不进普通配置**：Relay Key、图片 API Key 和 Write Cloud 匿名设备凭据保存在 Obsidian SecretStorage，不写进 `data.json`。
 - **真实写入前必确认**：同步前明确显示目标、内容、创建或更新、费用和余额变化。
@@ -137,7 +108,7 @@ WriteX 需要 Obsidian 1.11.4 或更高版本。
 
 ## 隐私与边界
 
-- 发送消息时，所选 Agent 会收到当前笔记内容以及本条消息明确附上的附件；WorkBuddy 可读取 Vault 中获准读取的上下文，不是严格的单文件沙箱。
+- 发送消息时，所选 Agent 会收到当前笔记内容以及本条消息明确附上的附件；仅在你发起文风提炼时，当前 Agent 才会收到你显式选择的代表作。WorkBuddy 可读取 Vault 中获准读取的上下文，不是严格的单文件沙箱。
 - Agent CLI、主题下载、用户选择的图片 API、自建 Relay 和 Write Cloud 会分别联网，并遵循各自的服务条款。
 - Write Cloud 是可选的闭源托管服务；开源插件、本地 Agent、预览复制和自建 Relay 不依赖它。
 - 当前没有支付、订阅、充值、正式发布、群发、定时发布、自动同步、数据分析、团队或多渠道分发。

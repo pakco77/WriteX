@@ -2,6 +2,13 @@
 
 All notable public changes to WriteX are documented here.
 
+## 0.5.8 - 2026-08-30
+
+- Added one confirmed, Vault-local “我的文风” profile: explicit representative-work selection, per-note toggle, separate prompt context and compact message snapshot; export to a local Skill only after confirmation and never overwrite a manually changed export.
+- Moved the local topic inbox into a reusable editor-tab page with created-time groups, local search, explicit target-note routing, and no automatic send or draft creation.
+- Replaced direct selection replacement with a local before/after comparison modal and bounded text diff; only an explicit apply invokes the existing guarded editor replacement.
+- Migrated persisted data from schema 5 to 6 without changing existing notes, topics, feedback, attachment, Relay, Cloud, or WeChat-cache records.
+
 ## 0.5.7 - 2026-08-18
 
 - Added GPT-style Chat attachments: choose files with the paperclip, drag them into the composer, or paste files from the clipboard.

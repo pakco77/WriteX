@@ -79,6 +79,7 @@ export function buildWritingPrompt(input: {
   maxContextChars: number;
   mode?: "chat" | "plan";
   skillInstruction?: string;
+  styleInstruction?: string;
   feedbackInstruction?: string;
   attachments?: ChatAttachmentContext[];
 }): string {
@@ -105,10 +106,11 @@ export function buildWritingPrompt(input: {
         ? "只允许读取下面明确附上的本地文件；不要修改文件，不要访问网络，不要运行其他命令。"
         : "不要修改文件，不要运行命令，不要调用工具。";
   return [
-    "你是运行在 Obsidian 右侧的中文公众号写作助手。",
+    "你是运行在 Obsidian 右侧的中文公众号写作助手。当前用户要求、事实材料和明确格式约束优先级最高。",
     `只完成用户提出的写作任务。${toolBoundary}`,
     modeInstruction,
     input.feedbackInstruction?.trim() || "",
+    input.styleInstruction?.trim() || "",
     input.skillInstruction?.trim() || "",
     attachments,
     `当前笔记：${input.filePath}`,
@@ -148,7 +150,7 @@ const LEAN_FLAGS = [
   "--disable", "skill_search",
 ];
 
-export function buildCodexArgs(request: Pick<CodexTurnRequest, "cwd" | "threadId" | "model" | "reasoningEffort" | "imagePaths" | "ephemeral">): string[] {
+export function buildCodexArgs(request: Pick<CodexTurnRequest, "cwd" | "threadId" | "model" | "reasoningEffort" | "ephemeral" | "imagePaths">): string[] {
   const model = request.model?.trim();
   const modelArgs = model ? ["--model", model] : [];
   const reasoningArgs = request.reasoningEffort
@@ -158,6 +160,32 @@ export function buildCodexArgs(request: Pick<CodexTurnRequest, "cwd" | "threadId
   return request.threadId
     ? ["exec", "resume", ...LEAN_FLAGS, ...modelArgs, ...reasoningArgs, ...imageArgs, "-c", 'sandbox_mode="read-only"', request.threadId, "-"]
     : ["exec", ...LEAN_FLAGS, ...(request.ephemeral ? ["--ephemeral"] : []), ...modelArgs, ...reasoningArgs, ...imageArgs, "--sandbox", "read-only", "-C", request.cwd, "-"];
+}
+
+export function buildCodexNoToolArgs(request: Pick<CodexTurnRequest, "cwd" | "model" | "reasoningEffort">): string[] {
+  const modelArgs = request.model?.trim() ? ["--model", request.model.trim()] : [];
+  const reasoningArgs = request.reasoningEffort ? ["-c", `model_reasoning_effort="${request.reasoningEffort}"`] : [];
+  return [
+    "exec", ...LEAN_FLAGS,
+    "--disable", "shell_tool",
+    "--disable", "code_mode",
+    "--disable", "code_mode_host",
+    "--disable", "browser_use",
+    "--disable", "browser_use_external",
+    "--disable", "browser_use_full_cdp_access",
+    "--disable", "computer_use",
+    "--disable", "image_generation",
+    "--disable", "in_app_browser",
+    "--disable", "multi_agent",
+    "--disable", "view_image",
+    "--disable", "web_search_request",
+    "--ephemeral",
+    "--sandbox", "read-only",
+    ...modelArgs,
+    ...reasoningArgs,
+    "-C", request.cwd,
+    "-",
+  ];
 }
 
 export function buildCodexImageArgs(
@@ -277,6 +305,20 @@ export class CodexRuntime {
       throw new Error(detail);
     }
     return { text: text.trim(), threadId, warnings };
+  }
+
+  async runNoToolTurn(request: Omit<CodexTurnRequest, "threadId" | "imagePaths">): Promise<CodexTurnResult> {
+    const binary = await this.resolvePath();
+    const result = await this.runProcess(binary, buildCodexNoToolArgs(request), request.prompt, request.signal);
+    let text = "";
+    const warnings: string[] = [];
+    for (const line of result.stdout.split("\n")) {
+      const event = parseCodexJsonLine(line);
+      if (event.text) text = event.text;
+      if (event.warning) warnings.push(event.warning);
+    }
+    if (!text.trim()) throw new Error(warnings.at(-1) ?? result.stderr.trim() ?? `Codex exited with code ${result.code}.`);
+    return { text: text.trim(), warnings };
   }
 
   async runImageTurn(request: CodexImageRequest): Promise<CodexImageResult> {

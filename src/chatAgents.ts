@@ -72,6 +72,21 @@ interface ExternalAgentArgsRequest {
   sessionId?: string;
 }
 
+const CLAUDE_NO_TOOL_FLAGS = ["--tools", "--strict-mcp-config", "--no-session-persistence", "--setting-sources"] as const;
+
+export interface ClaudeNoToolCapabilities {
+  supported: boolean;
+  missing: string[];
+}
+
+export function parseClaudeNoToolCapabilities(result: { code: number; stdout: string; stderr?: string }): ClaudeNoToolCapabilities {
+  const help = `${result.stdout}\n${result.stderr ?? ""}`;
+  const missing = result.code === 0
+    ? CLAUDE_NO_TOOL_FLAGS.filter(flag => !help.includes(flag))
+    : [...CLAUDE_NO_TOOL_FLAGS];
+  return { supported: missing.length === 0, missing };
+}
+
 export function buildExternalAgentArgs(
   agent: Exclude<ChatAgentId, "codex">,
   request: ExternalAgentArgsRequest,
@@ -86,6 +101,27 @@ export function buildExternalAgentArgs(
   if (request.sessionId?.trim()) args.push("--resume", request.sessionId.trim());
   args.push("--permission-mode", "default");
   args.push(request.prompt);
+  return args;
+}
+
+export function buildExternalAgentNoToolArgs(
+  agent: Exclude<ChatAgentId, "codex">,
+  request: Pick<ExternalAgentArgsRequest, "prompt" | "model">,
+  claudeCapabilities?: ClaudeNoToolCapabilities,
+): string[] {
+  if (agent === "claude" && !claudeCapabilities?.supported) {
+    throw new Error("无法确认 Claude CLI 的无工具能力；为保护未选择的 Vault 内容，文风提炼已拒绝执行。请修复官方 CLI 后再试。");
+  }
+  const args = [
+    "-p",
+    "--output-format", "json",
+    "--tools", "",
+    "--strict-mcp-config",
+    "--no-session-persistence",
+    "--setting-sources", "",
+  ];
+  if (request.model?.trim() && request.model !== "default") args.push("--model", request.model.trim());
+  args.push("--permission-mode", "default", request.prompt);
   return args;
 }
 
@@ -213,6 +249,17 @@ export class ChatAgentRuntime {
       request.cwd,
       request.signal,
     );
+    if (result.code !== 0) throw new Error(result.stderr.trim() || `${AGENT_LABELS[request.agent]} 执行失败。`);
+    return parseExternalAgentJson(result.stdout);
+  }
+
+  async runNoToolOneShot(request: ChatAgentOneShotRequest): Promise<CodexTurnResult> {
+    if (request.agent === "codex") return this.codex.runNoToolTurn({ ...request, ephemeral: true });
+    const binary = await this.resolveExternalPath(request.agent);
+    const claudeCapabilities = request.agent === "claude"
+      ? parseClaudeNoToolCapabilities(await this.runProcess(binary, ["--help"], request.cwd, request.signal))
+      : undefined;
+    const result = await this.runProcess(binary, buildExternalAgentNoToolArgs(request.agent, request, claudeCapabilities), request.cwd, request.signal);
     if (result.code !== 0) throw new Error(result.stderr.trim() || `${AGENT_LABELS[request.agent]} 执行失败。`);
     return parseExternalAgentJson(result.stdout);
   }

@@ -29,7 +29,7 @@ test("Chat welcome uses the WriteX logo and draft sync enables comments by defau
     readFile(new URL("../src/view.ts", import.meta.url), "utf8"),
     readFile(new URL("../src/sync.ts", import.meta.url), "utf8"),
   ]);
-  const welcome = view.match(/private renderChatWelcome[\s\S]*?private startDivergence/)?.[0] ?? "";
+  const welcome = view.match(/private renderChatWelcome[\s\S]*?private startOutline/)?.[0] ?? "";
 
   assert.match(welcome, /setIcon\(icon, WRITEX_ICON\)/);
   assert.doesNotMatch(welcome, /setIcon\(icon, "sparkles"\)/);
@@ -117,23 +117,38 @@ test("note rename, editor image sync, and image-size selection stay connected to
   assert.match(styles, /\.oa-image-size-select/);
 });
 
-test("Chat prepends divergence and cut shortcuts to the existing draft without auto-sending", async () => {
+test("Chat prepends the outline guide to the existing draft without auto-sending", async () => {
   const [view, styles] = await Promise.all([
     readFile(new URL("../src/view.ts", import.meta.url), "utf8"),
     readFile(new URL("../styles.css", import.meta.url), "utf8"),
   ]);
 
-  assert.match(view, /const DIVERGE_PROMPT = "发散：/);
-  assert.match(view, /当前对话、当前笔记或选中文字/);
-  assert.match(view, /真实经历[\s\S]*5 个彼此不同的写作角度/);
-  assert.match(view, /核心对抗、读者价值、需要补充的真实材料/);
-  assert.match(view, /不要直接写成稿，不要编造经历/);
-  assert.match(view, /aria-label": "发散：从真实经历找角度、定选题、搭大纲"/);
+  assert.match(view, /const OUTLINE_PROMPT =/);
+  assert.match(view, /文章结构设计师/);
+  assert.match(view, /七段式递进[\s\S]*漏斗式教程[\s\S]*情绪弧线[\s\S]*剥洋葱/);
+  assert.match(view, /5Why[\s\S]*MECE[\s\S]*快思维[\s\S]*慢思维/);
+  assert.match(view, /Step 1：选题定性[\s\S]*Step 2：核心观点萃取[\s\S]*Step 3：结构选择[\s\S]*Step 4：血肉填充[\s\S]*Step 5：大纲成型 \+ 校准/);
+  assert.match(view, /方案A：七段式递进[\s\S]*方案B：漏斗式教程[\s\S]*方案C：情绪弧线叙事[\s\S]*方案D：剥洋葱式诊断/);
+  assert.match(view, /第1段（起）[\s\S]*钩子层[\s\S]*具体的画面或时刻[\s\S]*大多数人看到的「症状」/);
+  assert.match(view, /## 文章定位[\s\S]*## 大纲骨架[\s\S]*## 情绪曲线设计[\s\S]*## 逻辑曲线设计[\s\S]*## 表达理论标签[\s\S]*## 写作建议/);
+  assert.match(view, /不直接给答案[\s\S]*强制收敛[\s\S]*结构先行[\s\S]*情绪可视化[\s\S]*可回包/);
+  assert.match(view, /首次激活时只发开场问题[\s\S]*不要直接产出大纲[\s\S]*一次只聚焦当前步骤/);
+  assert.match(view, /若本条用户消息在本说明之后附有非空草稿或主题[\s\S]*把它当作 Step 1 的用户回答[\s\S]*直接做选题扫描[\s\S]*不重复首次开场/);
+  assert.match(view, /只有没有附带内容时才使用指定首次开场白/);
+  assert.match(view, /当前笔记、选区、Chat 历史或系统提供的上下文都只是参考上下文[\s\S]*不算「本条用户消息在本说明之后附有的非空草稿\/主题」/);
+  assert.match(view, /只有 OUTLINE_PROMPT 指令正文结束后[\s\S]*同一个用户要求末尾明确出现额外的新草稿\/主题文本[\s\S]*才视作 Step 1 回答/);
+  assert.match(view, /否则即使当前笔记已有正文，也必须使用首次开场/);
+  assert.match(view, /不要编造用户经历、数据或论据/);
+  assert.match(view, /aria-label": "大纲：通过五步问答搭建文章骨架"/);
+  assert.match(view, /title: "通过五步问答搭建文章骨架"/);
+  assert.match(view, /setIcon\(outlineIcon, "list-tree"\)/);
+  assert.match(view, /outline\.createSpan\(\{ text: "大纲" \}\)/);
   assert.match(view, /aria-label": "找切口：随机准备 3 个观察方向"/);
   assert.match(view, /setIcon\(cutIcon, "scan-search"\)/);
   assert.match(view, /buildCutPrompt\(sampleCutLenses\(\)\)/);
   assert.match(view, /private prepareComposerDraft/);
-  assert.match(view, /this\.prepareComposerDraft\(DIVERGE_PROMPT, \{ plan: true, prefix: true \}\)/);
+  assert.match(view, /private startOutline\(\): void/);
+  assert.match(view, /this\.prepareComposerDraft\(OUTLINE_PROMPT, \{ plan: true, prefix: true \}\)/);
   assert.match(view, /this\.prepareComposerDraft\(buildCutPrompt\(sampleCutLenses\(\)\), \{ plan: true, prefix: true \}\)/);
   assert.match(view, /if \(!options\.prefix && current && current !== target\)/);
   assert.match(view, /options\.prefix && current \? `\$\{target\}\\n\\n\$\{current\}` : target/);
@@ -146,7 +161,8 @@ test("Chat prepends divergence and cut shortcuts to the existing draft without a
   assert.match(shortcutRule, /background:\s*transparent/);
   assert.doesNotMatch(shortcutRule, /var\(--oa-accent\)/);
   assert.match(styles, /\.oa-chat-shortcuts button:hover[\s\S]*?color:\s*var\(--oa-accent\)/);
-  const shortcuts = view.match(/private startDivergence\([\s\S]*?private openTopicLibrary/)?.[0] ?? "";
+  assert.doesNotMatch(view, /DIVERGE_PROMPT|startDivergence|aria-label": "发散/);
+  const shortcuts = view.match(/private startOutline\([\s\S]*?private openTopicLibrary/)?.[0] ?? "";
   assert.doesNotMatch(shortcuts, /sendMessage|requestSubmit|chatRuntime|createRelayClient|openWeChatSync/);
   assert.match(styles, /\.oa-chat-shortcuts/);
 });
@@ -380,31 +396,87 @@ test("assistant answers expose one-click local topic saving without an Agent pat
   assert.doesNotMatch(actions, /sendMessage|chatRuntime|createRelayClient|Write Cloud|openWeChatSync/);
 });
 
-test("Topic Library is a compact local inbox and never auto-sends", async () => {
-  const [view, styles] = await Promise.all([
+test("Topic Library is a standalone local card page and never auto-sends", async () => {
+  const [view, topicPage, main, styles] = await Promise.all([
     readFile(new URL("../src/view.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/topicLibraryView.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/main.ts", import.meta.url), "utf8"),
     readFile(new URL("../styles.css", import.meta.url), "utf8"),
   ]);
-  const modal = view.match(/class TopicLibraryModal extends Modal[\s\S]*?export class AgentView/)?.[0] ?? "";
-  assert.match(modal, /把还没开始写、但不想忘记的一句话收住/);
-  assert.match(modal, /想到什么，回车收住/);
-  assert.match(modal, /event\.key === "Enter" && !event\.isComposing/);
-  assert.match(modal, /继续：\$\{topic\.title\}/);
-  assert.match(modal, /new Menu\(\)/);
-  assert.match(modal, /event\.stopPropagation\(\)/);
-  assert.match(modal, /打开来源/);
-  assert.match(modal, /改标题/);
-  assert.match(modal, /删除/);
-  assert.match(modal, /一句话就够，先把它收住/);
-  assert.match(modal, /saveManualTopic/);
-  assert.doesNotMatch(modal, /搜索选题|筛选选题状态|写作中|已完成|继续创作/);
+  assert.match(topicPage, /TOPIC_LIBRARY_VIEW_TYPE = "writex-topic-library-view"/);
+  assert.match(topicPage, /getDisplayText\(\): string \{ return "WriteX 选题库"/);
+  assert.match(topicPage, /把还没开始写、但不想忘记的一句话收住/);
+  assert.match(topicPage, /想到什么，回车收住/);
+  assert.match(topicPage, /shouldSaveQuickTopicOnKey\(event\.key, event\.isComposing\)/);
+  assert.match(topicPage, /搜索标题或来源/);
+  assert.match(topicPage, /groupTopicsByCreatedAt/);
+  assert.match(topicPage, /送入 WriteX Chat/);
+  assert.match(topicPage, /continueTopicToChat/);
+  assert.match(topicPage, /打开来源/);
+  assert.match(topicPage, /改标题/);
+  assert.match(topicPage, /删除/);
+  assert.match(topicPage, /saveQuickTopicInput\(/);
+  assert.match(topicPage, /refreshCards: \(\) => this\.renderCards\(\)/);
+  assert.doesNotMatch(topicPage, /筛选选题状态|写作中|已完成/);
   assert.match(view, /选题库，\$\{this\.plugin\.data\.topics\.length\} 条/);
-  assert.match(view, /new TopicLibraryModal\(/);
+  assert.match(view, /activateTopicLibrary/);
   assert.match(view, /this\.prepareComposerDraft\(/);
   assert.doesNotMatch(view, /type ActiveTab = "chat" \| "gallery" \| "preview" \| "topics"/);
-  assert.match(styles, /\.oa-topic-item/);
+  assert.match(main, /registerView\(TOPIC_LIBRARY_VIEW_TYPE/);
+  assert.match(main, /open-topic-library/);
+  assert.match(styles, /\.oa-topic-card-grid/);
   assert.match(styles, /\.oa-topic-quick-input/);
   assert.doesNotMatch(styles, /\.oa-topic-filter\.is-active/);
+});
+
+test("v0.58 keeps writing style opt-in, local, and separate from the task Skill", async () => {
+  const [view, main, modal, style, controller, types] = await Promise.all([
+    readFile(new URL("../src/view.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/main.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/writingStyleModal.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/writingStyle.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/writingStyleController.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/types.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(types, /version: 6/);
+  assert.match(types, /writingStyleProfile\?: WritingStyleProfile/);
+  assert.match(types, /writingStyleEnabled\?: boolean/);
+  assert.match(types, /writingStyle\?: WritingStyleSnapshot/);
+  assert.match(view, /我的文风/);
+  assert.match(view, /setWritingStyleEnabled/);
+  assert.match(view, /buildStyleInstruction\(writingStyleProfile\)/);
+  assert.match(view, /我的文风 · v\$\{message\.writingStyle\.revision\}/);
+  assert.match(modal, /明确选择代表作/);
+  assert.match(modal, /提炼候选文风/);
+  assert.match(modal, /确认文风/);
+  assert.match(modal, /确认导出/);
+  assert.match(modal, /不会自动扫描正文或持续学习/);
+  assert.match(modal, /private readonly selectionContext: SelectionContext \| null/);
+  assert.doesNotMatch(modal, /private readonly selection: SelectionContext \| null/);
+  assert.match(main, /exportWritingStyleSkill/);
+  assert.match(main, /本地 Skill 已被手动修改，WriteX 不会覆盖/);
+  assert.match(controller, /updateExisting/);
+  assert.match(style, /WRITING_STYLE_SKILL_PATH/);
+  assert.doesNotMatch(modal, /Write Cloud|createWriteRelayClient|openWeChatSync|requestUrl/);
+});
+
+test("v0.58 compares a captured selection before one protected replacement", async () => {
+  const [view, diff, main, controller] = await Promise.all([
+    readFile(new URL("../src/view.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/selectionDiff.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/main.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/writingStyleController.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(view, /class SelectionCompareModal extends Modal/);
+  assert.match(view, /"差异".*"原文".*"建议"/s);
+  assert.match(view, /"保留原文"/);
+  assert.match(view, /"应用建议"/);
+  assert.match(view, /computeSelectionReplacement\(this\.context, this\.markdown\)/);
+  assert.match(view, /replaceOriginalSelection\(this\.context, this\.replacement\)/);
+  assert.match(diff, /before\.length \+ after\.length > budget/);
+  assert.match(diff, /Array\.from\(original\)/);
+  assert.match(main, /replaceCapturedRange\(editor, context, replacement\)/);
+  assert.match(controller, /原选区已经变化，请重新划词后再替换/);
 });
 
 test("WriteX branding changes user-facing copy but preserves compatibility identifiers", async () => {
@@ -420,15 +492,15 @@ test("WriteX branding changes user-facing copy but preserves compatibility ident
   ]);
   const metadata = JSON.parse(manifest);
   const lock = JSON.parse(packageLock);
-  assert.deepEqual([metadata.id, metadata.name, metadata.version], ["writex", "WriteX", "0.5.7"]);
+  assert.deepEqual([metadata.id, metadata.name, metadata.version], ["writex", "WriteX", "0.5.8"]);
   assert.equal(metadata.minAppVersion, "1.11.4");
-  assert.equal(JSON.parse(versions)["0.5.5"], "1.11.4");
+  assert.equal(JSON.parse(versions)["0.5.8"], "1.11.4");
   assert.equal(JSON.parse(pkg).name, "writex");
-  assert.equal(JSON.parse(pkg).version, "0.5.7");
+  assert.equal(JSON.parse(pkg).version, "0.5.8");
   assert.equal(lock.name, "writex");
-  assert.equal(lock.version, "0.5.7");
+  assert.equal(lock.version, "0.5.8");
   assert.equal(lock.packages[""].name, "writex");
-  assert.equal(lock.packages[""].version, "0.5.7");
+  assert.equal(lock.packages[""].version, "0.5.8");
   assert.match(view, /aria-label": "WriteX"/);
   const brand = view.match(/const brand = header\.createDiv[\s\S]*?const actions =/)?.[0] ?? "";
   assert.match(brand, /createSpan\(\{ text: "Write" \}\)/);

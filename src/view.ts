@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type ObsidianAgentPlugin from "./main";
 import { buildWritingPrompt } from "./codex";
+import { runAndRecordAssistant } from "./chatTurnController";
 import {
   AGENT_LABELS,
   AGENT_MODELS,
@@ -43,6 +44,9 @@ import { inspectImage, planWeChatImage } from "./images";
 import { describeImageProblem, galleryProblemSummary, missingImageInspection, type ImageProblem } from "./imageProblems";
 import { imageProviderLabel, resolveGeneratedProvider } from "./imageRouting";
 import { buildCutPrompt, sampleCutLenses, sortTopicsNewestFirst } from "./topics";
+import { prepareSelectionComparison, SelectionCompareController } from "./selectionCompareController";
+import { buildStyleInstruction, sha256Text, styleEnabled } from "./writingStyle";
+import { WritingStyleModal } from "./writingStyleModal";
 import { ThemeLibraryModal } from "./themeLibraryModal";
 import { assetIdempotencyKey, characterCount, uploadFileName } from "./wechatSync";
 import {
@@ -89,7 +93,152 @@ interface PendingImageRequest {
 
 const CHAT_AGENT_IDS: ChatAgentId[] = ["codex", "claude", "workbuddy"];
 
-const DIVERGE_PROMPT = "发散：请结合当前对话、当前笔记或选中文字里一件我真实经历的事，先提取事实、现场、代价、变化和我当时的判断，再给出 5 个彼此不同的写作角度。每个角度包含：一句选题、核心对抗、读者价值、需要补充的真实材料。最后推荐最值得写的 1 个，给出 3 个标题候选、一条文章主线和一份不超过 6 节的大纲。不要直接写成稿，不要编造经历；材料不足时先问我最多 3 个关键问题。";
+const OUTLINE_PROMPT = `你是一位「文章结构设计师」，擅长用「拆文方法论」帮助用户从零开始搭建文章骨架。你不是直接给答案的 AI，而是通过问答式引导，让用户自己长出清晰的写作思路。
+
+你的核心能力：
+1. 判断选题适合什么结构：七段式递进、漏斗式教程、情绪弧线叙事或剥洋葱逻辑。
+2. 用 5Why 追问帮用户找到本质观点。
+3. 用 MECE 原则帮用户分类论据。
+4. 用「快思维 → 慢思维」切换帮用户校准表达深度。
+
+工作边界与节奏：
+- 不直接替用户给出观点、经历、数据或论据；不要编造用户经历、数据或论据。材料不足时如实追问。
+- 当前笔记、选区、Chat 历史或系统提供的上下文都只是参考上下文，不算「本条用户消息在本说明之后附有的非空草稿/主题」。
+- 只有 OUTLINE_PROMPT 指令正文结束后，在同一个用户要求末尾明确出现额外的新草稿/主题文本，才视作 Step 1 回答；也就是说，若本条用户消息在本说明之后附有非空草稿或主题，把它当作 Step 1 的用户回答，直接做选题扫描，不重复首次开场。
+- 否则即使当前笔记已有正文，也必须使用首次开场；只有没有附带内容时才使用指定首次开场白：首次激活时只发开场问题，不要直接产出大纲，不要预演五步流程。首次回复必须是：
+  「你好，我是你的文章结构设计师。接下来我会通过一系列问题，帮你把一个模糊的选题，拆成一份可执行的文章大纲。
+
+  请告诉我：你今天要写的选题是什么？用一句话描述。
+
+  （不用担心说得不够好，越粗糙越好，我会帮你打磨。）」
+- 后续严格一次只聚焦当前步骤和必要问题，等待用户回答后再继续；不要在一轮内把五步全跑完。每轮最多问当前步骤所需的 1–3 个问题。
+- 用户发散时，以「如果只能用一句话……」「最核心的一点是……」帮助收束；保留用户原话中的具体经验和判断，不把它替换成空泛模板。
+
+交互流程（五步问答法）：
+
+Step 1：选题定性（判断文章类型）
+先问：「你的选题是什么？请用一句话描述你要写的核心主题。」
+收到回答后做「选题扫描」，从三个维度判断：
+- 反常识度：核心观点是否违背直觉？反常识优先七段式递进。
+- 情感指向：最终是否指向人的价值或意义追问？是则优先理性 → 深情的情绪弧线。
+- 实用属性：是在教别人怎么做，还是让别人怎么想？教程优先漏斗式，观点优先剥洋葱。
+输出判断并说明：「根据你的选题，我初步判断这篇文章适合【XX结构】。接下来我会通过几个问题，帮你把这个选题拆成可执行的大纲。」然后进入 Step 2。
+
+Step 2：核心观点萃取（找到那颗洋葱芯）
+从下列 5Why 式追问中选 2–3 个最关键的问题，不要全部堆给用户：
+- 如果只能用一句话告诉别人「这篇文章到底在说什么」，你会怎么说？
+- 你的观点和大多数人的直觉有什么不同？
+- 如果抛开所有行业术语和假设，这件事最底层的真相是什么？
+- 读者读完这篇文章后，应该带走一个什么判断或行动？
+回答后提炼并请用户确认：「你的核心命题似乎是：【一句话】。接下来我们围绕这个命题，搭建支撑它的骨架。」然后进入 Step 3。
+
+Step 3：结构选择（匹配最适合的框架）
+基于 Step 1 和 Step 2 给出有理由的结构建议，并让用户选择或混合：
+
+方案A：七段式递进（反常识观点文）
+适合核心观点违背直觉、需要层层剥开说服读者：
+- 起（1）：抛出反常识现象，建立悬念。
+- 承（2–3）：第一层拆解（组织/机制层面），第二层拆解（数据/底座层面）。
+- 转（4–5）：第三层拆解（人的价值浮现），第四层拆解（时间/伦理层面）。
+- 深（6）：最残酷的部分（权力/成长/管理者）。
+- 合（7）：回归本质，情感升华。
+
+方案B：漏斗式教程（产品/工具教学）
+适合教别人用某个工具、学某个方法：
+- 钩子层：为什么学这个（痛点 + 价值判断）。
+- 全景层：整体地图是什么（建立心理模型）。
+- 展开层：按重要性/使用频率拆解 Step 1 → Step 2 → Step 3。
+- 场景层：具体怎么用（代入真实场景）。
+- 收尾层：常见问题 + 下一步行动。
+
+方案C：情绪弧线叙事（个人经历/反思）
+适合创业故事、年终总结、公开信：
+- 起：具体场景切入，一个画面或时刻。
+- 承：理性展开，补充事实、数据、逻辑论证。
+- 转：遇到冲突、困境或反常识发现。
+- 合：情感升华，回归人的价值或意义追问。
+
+方案D：剥洋葱式诊断（问题分析/战略思考）
+适合分析一个问题、提出创新方案：
+- 表层：大家看到的症状/常识。
+- 剥开第一层：挑战基本假设。
+- 剥开第二层：拆解到最基本要素。
+- 剥开第三层：重新定义问题。
+- 核心：本质结论 + 可执行方案。
+
+接着问：「以上【X】种结构中，你觉得哪种最贴近你的写作意图？或者你想混合使用？」等待回答后进入 Step 4。
+
+Step 4：血肉填充（问答式梳理每一部分）
+按用户选定的结构，逐段推进；每次只问当前一段或一层。每收到一段回答都先总结：「好的，这一段的核心是：【一句话】。我们把它记下来。」再问下一段。
+
+如果是七段式递进，依次问：
+- 第1段（起）：你想用什么反常识现象或钩子开头？是一个故事、一个数据，还是一个冲突场景？
+- 第2–3段（承）：支撑你观点的第一层证据是什么？是亲身经历、行业观察，还是数据？
+- 第4–5段（转）：当读者可能产生质疑时，你用什么来回应？有没有一个「但是」的转折？
+- 第6段（深）：这篇文章最扎心或最反直觉的部分是什么？
+- 第7段（合）：你最终想落在哪里？是一个金句、一个行动号召，还是一个开放的思考？
+
+如果是漏斗式教程，依次问：
+- 钩子层：读者不学这个，会损失什么？
+- 全景层：用一句话描述这个工具的核心能力模型是什么？
+- 展开层：按使用频率排序，最重要的 3 个功能是什么？
+- 场景层：举一个读者最熟悉的使用前 vs 使用后对比场景。
+- 收尾层：读者第一步应该做什么（最小可行行动）？
+
+如果是情绪弧线叙事，依次问：
+- 起：有没有一个具体的画面或时刻，能让读者一秒钟代入你的处境？
+- 承：支撑这个故事的事实、数据或逻辑是什么？
+- 转：你在什么时刻遇到了最大的冲突或困境？
+- 合：你最终想传达什么情感或价值？
+
+如果是剥洋葱式诊断，依次问：
+- 表层：大多数人看到的「症状」或「常识」是什么？
+- 第一层：如果挑战这个常识，哪个基本假设最值得质疑？
+- 第二层：拆解到最基本要素后，真正的驱动因素是什么？
+- 第三层：重新定义这个问题后，它变成了什么问题？
+- 核心：你的本质结论和可执行方案是什么？
+
+Step 5：大纲成型 + 校准
+只有在用户已提供相应素材、确认可以汇总时，才整合为以下 Markdown 结构化大纲；缺失项标为「待补充」，不能自行虚构：
+
+# 【文章标题（建议）】
+
+## 文章定位
+- 类型：【七段式递进 / 漏斗式教程 / 情绪弧线 / 剥洋葱】
+- 核心命题：【一句话】
+- 目标读者：【谁】
+- 阅读时长预估：【X分钟 / X字】
+
+## 大纲骨架
+
+### 第1段：【段落功能】（约X字）
+- 核心任务：【这一段要解决什么问题】
+- 内容要点：【用户回答的要点】
+- 情绪基调：【理性 / 亲切 / 悬念 / 轻快】
+
+### 第2段：【段落功能】（约X字）
+……按所选结构补全其余段落。
+
+## 情绪曲线设计
+用简单折线图示意，并标注每段情绪值（-5 到 +5）。
+
+## 逻辑曲线设计
+用箭头图示意从现象到本质的剥洋葱路径。
+
+## 表达理论标签
+- 【自动匹配：如亚里士多德修辞三要素、金字塔原理、第一性原理、MECE 等】
+
+## 写作建议
+- 根据大纲给出 3–5 条具体建议，例如第3段需要一个具体案例、第5段情绪需要再压低一点。
+
+最后问：「这个大纲是否符合你的预期？有没有哪一段你觉得需要调整方向、补充素材，或者情绪不对？我们可以继续打磨。」
+
+核心原则：
+- 不直接给答案：永远用问题引导用户思考，让用户自己长出大纲。
+- 强制收敛：发散时用一句话收束到最核心的一点。
+- 结构先行，文字后行：先确定骨架，再讨论具体内容。
+- 情绪可视化：每一段都标注情绪基调，让用户感知文章的呼吸感。
+- 可回包：最终大纲要能让用户用本质命题回包解释其他现象。`;
 
 const PREVIEW_DEVICE = { label: "iPhone 16", width: 375, height: 813, camera: "is-island" } as const;
 function errorMessage(error: unknown): string {
@@ -685,6 +834,67 @@ class TopicLibraryModal extends Modal {
 
 }
 
+class SelectionCompareModal extends Modal {
+  private mode: "diff" | "original" | "suggestion" = "diff";
+  private readonly controller: SelectionCompareController;
+  private readonly replacement: string;
+
+  constructor(
+    app: App,
+    private readonly plugin: ObsidianAgentPlugin,
+    private readonly context: SelectionContext,
+    private readonly markdown: string,
+  ) {
+    super(app);
+    this.replacement = this.plugin.computeSelectionReplacement(this.context, this.markdown);
+    this.controller = new SelectionCompareController(
+      () => this.plugin.replaceOriginalSelection(this.context, this.replacement),
+      () => this.close(),
+    );
+  }
+
+  override onOpen(): void {
+    this.modalEl.addClass("oa-selection-compare-modal");
+    this.setTitle("对比替换");
+    this.renderModal();
+  }
+
+  private renderModal(): void {
+    const root = this.contentEl; root.empty();
+    const suggestion = this.replacement;
+    const controls = root.createDiv({ cls: "oa-selection-compare-tabs", attr: { role: "tablist", "aria-label": "对比视图" } });
+    for (const [mode, label] of [["diff", "差异"], ["original", "原文"], ["suggestion", "建议"]] as const) {
+      const button = controls.createEl("button", { text: label, attr: { type: "button", role: "tab", "aria-selected": String(mode === this.mode) } });
+      button.toggleClass("is-active", mode === this.mode);
+      button.onclick = () => { this.mode = mode; this.renderModal(); };
+    }
+    const content = root.createDiv({ cls: `oa-selection-compare-content is-${this.mode}` });
+    if (this.mode === "diff") {
+      const diff = prepareSelectionComparison(this.context.text, suggestion);
+      if (diff.truncated) content.createEl("p", { cls: "oa-selection-compare-note", text: "选段较长，未做细粒度高亮；请在下方完整对照。" });
+      const columns = content.createDiv({ cls: "oa-selection-compare-columns" });
+      const original = columns.createDiv(); original.createEl("strong", { text: "原选段" }); original.createEl("pre", { text: this.context.text });
+      const proposed = columns.createDiv(); proposed.createEl("strong", { text: "AI 建议" });
+      if (diff.truncated) proposed.createEl("pre", { text: suggestion });
+      else {
+        const pre = proposed.createEl("pre", { cls: "oa-selection-diff" });
+        for (const part of diff.parts) pre.createSpan({ cls: `is-${part.kind}`, text: part.text });
+      }
+    } else {
+      const panel = content.createEl("pre", { text: this.mode === "original" ? this.context.text : suggestion });
+      panel.setAttribute("aria-label", this.mode === "original" ? "原选段" : "AI 建议");
+    }
+    const actions = root.createDiv({ cls: "oa-selection-compare-actions" });
+    actions.createEl("button", { text: "保留原文", attr: { type: "button" } }).onclick = () => this.controller.keepOriginal();
+    const apply = actions.createEl("button", { cls: "mod-cta", text: "应用建议", attr: { type: "button" } });
+    apply.onclick = async () => {
+      apply.disabled = true;
+      try { await this.controller.applyOnce(); }
+      catch (error) { apply.disabled = false; new Notice(errorMessage(error)); }
+    };
+  }
+}
+
 export class AgentView extends ItemView {
   private activeTab: ActiveTab = "chat";
   private notePath = "";
@@ -839,6 +1049,14 @@ export class AgentView extends ItemView {
     this.render();
     if (noteChanged) void this.refreshSkills();
     if (focusComposer) window.setTimeout(() => this.composerEl?.focus(), 0);
+  }
+
+  hasComposerDraft(): boolean {
+    return Boolean((this.composerEl?.value ?? this.composerDraft).trim());
+  }
+
+  refreshWritingStyle(): void {
+    this.render();
   }
 
   private render(): void {
@@ -1012,25 +1230,25 @@ export class AgentView extends ItemView {
     });
     setIcon(topics, "lightbulb");
     if (this.plugin.data.topics.length) topics.createEl("small", { cls: "oa-topic-count", text: String(this.plugin.data.topics.length) });
-    topics.onclick = () => this.openTopicLibrary();
+    topics.onclick = () => void this.plugin.activateTopicLibrary("", this.notePath);
     const newChat = skillTools.createEl("button", { cls: "oa-tool-button", attr: { type: "button", "aria-label": "新对话", title: "新对话" } });
     setIcon(newChat, "square-pen");
     newChat.disabled = this.imageRunning;
     newChat.onclick = () => void this.startNewConversation();
     if (!this.imageMode) {
       const shortcuts = form.createDiv({ cls: "oa-chat-shortcuts" });
-      const diverge = shortcuts.createEl("button", {
+      const outline = shortcuts.createEl("button", {
         attr: {
           type: "button",
-          "aria-label": "发散：从真实经历找角度、定选题、搭大纲",
-          title: "从真实经历找角度、定选题、搭大纲",
+          "aria-label": "大纲：通过五步问答搭建文章骨架",
+          title: "通过五步问答搭建文章骨架",
         },
       });
-      const divergeIcon = diverge.createSpan();
-      setIcon(divergeIcon, "sparkles");
-      diverge.createSpan({ text: "发散" });
-      diverge.disabled = this.running;
-      diverge.onclick = () => this.startDivergence();
+      const outlineIcon = outline.createSpan();
+      setIcon(outlineIcon, "list-tree");
+      outline.createSpan({ text: "大纲" });
+      outline.disabled = this.running;
+      outline.onclick = () => this.startOutline();
       const cut = shortcuts.createEl("button", {
         attr: {
           type: "button",
@@ -1214,6 +1432,25 @@ export class AgentView extends ItemView {
       this.render();
       window.setTimeout(() => this.composerEl?.focus(), 0);
     };
+    const writingStyle = this.plugin.data.writingStyleProfile;
+    const styleSwitch = modelControls.createEl("label", {
+      cls: "oa-plan-switch oa-writing-style-switch",
+      attr: { title: writingStyle ? "我的文风：点击文字管理档案" : "建立我的文风" },
+    });
+    const styleLabel = styleSwitch.createSpan({ text: "我的文风" });
+    styleLabel.onclick = event => {
+      event.preventDefault();
+      new WritingStyleModal(this.app, this.plugin, this.selectionContext).open();
+    };
+    const styleInput = styleSwitch.createEl("input", { attr: { type: "checkbox", role: "switch", "aria-label": "我的文风" } });
+    styleInput.checked = styleEnabled(writingStyle, state.writingStyleEnabled);
+    styleInput.disabled = !writingStyle || this.imageMode || this.running;
+    styleSwitch.createSpan({ cls: "oa-plan-switch-track", attr: { "aria-hidden": "true" } });
+    styleInput.onchange = () => {
+      void this.plugin.setWritingStyleEnabled(this.notePath, styleInput.checked)
+        .then(() => this.render())
+        .catch(error => { styleInput.checked = !styleInput.checked; new Notice(errorMessage(error)); });
+    };
 
     const attachmentInput = modeRow.createEl("input", { attr: { type: "file", multiple: "" } });
     attachmentInput.addClass("oa-visually-hidden");
@@ -1265,6 +1502,31 @@ export class AgentView extends ItemView {
     window.setTimeout(() => { stream.scrollTop = stream.scrollHeight; }, 0);
   }
 
+  private renderChatWelcome(container: HTMLElement): void {
+    const agentLabel = AGENT_LABELS[this.plugin.agentSettings.activeChatAgent];
+    const welcome = container.createDiv({ cls: "oa-welcome" });
+    const icon = welcome.createSpan();
+    setIcon(icon, WRITEX_ICON);
+    welcome.createEl("strong", { text: this.selectionContext ? "选中文字已经进入 Chat" : "从当前笔记继续写" });
+    welcome.createEl("p", {
+      text: this.selectionContext
+        ? `补充你想怎么处理，再发送给 ${agentLabel}。`
+        : "可以直接提问，也可以先在正文中划词，右键发送到 Chat。",
+    });
+    const suggestions = welcome.createDiv({ cls: "oa-suggestions" });
+    for (const text of ["把选中内容改得更具体", "梳理这篇文章的大纲", "给我 3 个更有冲突的标题"]) {
+      const button = suggestions.createEl("button", { text, attr: { type: "button" } });
+      button.onclick = () => {
+        if (this.composerEl) {
+          this.composerEl.value = text;
+          this.composerDraft = text;
+          autoGrow(this.composerEl);
+          this.composerEl.focus();
+        }
+      };
+    }
+  }
+
   private addComposerAttachments(files: File[]): void {
     if (!files.length || this.imageMode) return;
     const next = [...this.composerAttachments, ...files];
@@ -1299,33 +1561,8 @@ export class AgentView extends ItemView {
     }
   }
 
-  private renderChatWelcome(container: HTMLElement): void {
-    const agentLabel = AGENT_LABELS[this.plugin.agentSettings.activeChatAgent];
-    const welcome = container.createDiv({ cls: "oa-welcome" });
-    const icon = welcome.createSpan();
-    setIcon(icon, WRITEX_ICON);
-    welcome.createEl("strong", { text: this.selectionContext ? "选中文字已经进入 Chat" : "从当前笔记继续写" });
-    welcome.createEl("p", {
-      text: this.selectionContext
-        ? `补充你想怎么处理，再发送给 ${agentLabel}。`
-        : "可以直接提问，也可以先在正文中划词，右键发送到 Chat。",
-    });
-    const suggestions = welcome.createDiv({ cls: "oa-suggestions" });
-    for (const text of ["把选中内容改得更具体", "梳理这篇文章的大纲", "给我 3 个更有冲突的标题"]) {
-      const button = suggestions.createEl("button", { text, attr: { type: "button" } });
-      button.onclick = () => {
-        if (this.composerEl) {
-          this.composerEl.value = text;
-          this.composerDraft = text;
-          autoGrow(this.composerEl);
-          this.composerEl.focus();
-        }
-      };
-    }
-  }
-
-  private startDivergence(): void {
-    this.prepareComposerDraft(DIVERGE_PROMPT, { plan: true, prefix: true });
+  private startOutline(): void {
+    this.prepareComposerDraft(OUTLINE_PROMPT, { plan: true, prefix: true });
   }
 
   private startCutFinding(): void {
@@ -1347,16 +1584,7 @@ export class AgentView extends ItemView {
     return true;
   }
 
-  private openTopicLibrary(focusedTopicId = ""): void {
-    new TopicLibraryModal(
-      this.app,
-      this.plugin,
-      topic => this.continueTopic(topic),
-      focusedTopicId,
-    ).open();
-  }
-
-  private continueTopic(topic: TopicIdea): boolean {
+  prepareTopicDraft(topic: TopicIdea): boolean {
     const prompt = topic.sourceKind === "manual"
       ? `请帮我把这个选题发展成一篇可写的文章：\n\n${topic.title}`
       : `请基于这个选题继续创作：\n\n${topic.content}`;
@@ -1426,6 +1654,10 @@ export class AgentView extends ItemView {
     if (message.skill) {
       const skill = meta.createSpan({ cls: "oa-message-mode", text: message.skill.name });
       skill.setAttribute("title", `${message.skill.path}\nSHA-256 ${message.skill.sourceHash}`);
+    }
+    if (message.writingStyle) {
+      const style = meta.createSpan({ cls: "oa-message-mode", text: `我的文风 · v${message.writingStyle.revision}` });
+      style.setAttribute("title", `SHA-256 ${message.writingStyle.sourceHash}`);
     }
     if (message.context?.text.trim()) {
       const context = item.createDiv({ cls: "oa-message-context" });
@@ -1530,7 +1762,7 @@ export class AgentView extends ItemView {
     saveTopic.disabled = this.topicSavePending.has(message.id);
     saveTopic.onclick = async () => {
       if (savedTopic) {
-        this.openTopicLibrary(savedTopic.id);
+        void this.plugin.activateTopicLibrary(savedTopic.id, this.notePath);
         return;
       }
       this.topicSavePending.add(message.id);
@@ -1545,7 +1777,7 @@ export class AgentView extends ItemView {
         this.render();
       }
     };
-    if (message.context) this.actionButton(actions, "replace", "替换原选区", () => this.plugin.replaceOriginalSelection(message.context!, message.content), "oa-replace-action");
+    if (message.context) this.actionButton(actions, "replace", "对比替换", async () => { new SelectionCompareModal(this.app, this.plugin, message.context!, message.content).open(); }, "oa-replace-action");
     this.actionButton(
       actions,
       "text-cursor-input",
@@ -2132,6 +2364,13 @@ export class AgentView extends ItemView {
       path: activeSkill.skillFile,
       sourceHash: activeSkill.sourceHash,
     } : undefined;
+    const writingStyleProfile = styleEnabled(this.plugin.data.writingStyleProfile, state.writingStyleEnabled)
+      ? this.plugin.data.writingStyleProfile
+      : undefined;
+    const writingStyleSnapshot = writingStyleProfile ? {
+      revision: writingStyleProfile.revision,
+      sourceHash: sha256Text(writingStyleProfile.markdown),
+    } : undefined;
     const turnMode = imageRequest ? "chat" : this.chatMode;
     const userMessageId = createId("message");
     let attachments: ChatAttachment[] = [];
@@ -2201,10 +2440,11 @@ export class AgentView extends ItemView {
         maxContextChars: this.plugin.agentSettings.maxContextChars,
         mode: turnMode,
         skillInstruction: activeSkill ? buildExplicitSkillInstruction(activeSkill) : undefined,
+        styleInstruction: buildStyleInstruction(writingStyleProfile),
         feedbackInstruction: buildFeedbackInstruction(this.plugin.data.feedbackMemory, agent, activeSkill?.name),
         attachments: attachmentContext,
       });
-      const result = await this.plugin.chatRuntime.runTurn({
+      await runAndRecordAssistant(() => this.plugin.chatRuntime.runTurn({
         agent,
         cwd: this.plugin.getVaultBasePath(),
         prompt,
@@ -2214,20 +2454,22 @@ export class AgentView extends ItemView {
         imagePaths: attachments.filter(attachment => attachment.kind === "image")
           .map(attachment => join(this.plugin.getVaultBasePath(), attachment.filePath)),
         signal: controller.signal,
-      });
-      setAgentSession(state, agent, result.threadId);
-      state.messages.push({
-        id: createId("message"),
-        role: "assistant",
-        kind: "text",
-        content: result.text,
-        createdAt: Date.now(),
-        context,
-        mode: turnMode,
-        agent,
-        model: model || "默认",
-        reasoningEffort: reasoningEffort || undefined,
-        skill: skillSnapshot,
+      }), result => {
+        setAgentSession(state, agent, result.threadId);
+        state.messages.push({
+          id: createId("message"),
+          role: "assistant",
+          kind: "text",
+          content: result.text,
+          createdAt: Date.now(),
+          context,
+          mode: turnMode,
+          agent,
+          model: model || "默认",
+          reasoningEffort: reasoningEffort || undefined,
+          skill: skillSnapshot,
+          writingStyle: writingStyleSnapshot,
+        });
       });
       await this.plugin.persist();
     } catch (error) {
