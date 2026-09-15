@@ -66,6 +66,51 @@ function safeLinkUrl(value: string): string {
   return "";
 }
 
+function compressPlainCss(css: string): string {
+  const compact = css.replace(/rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)/gi, (match, red, green, blue) => {
+    const channels = [Number(red), Number(green), Number(blue)];
+    if (channels.some(channel => channel > 255)) return match;
+    const hex = channels.map(channel => channel.toString(16).padStart(2, "0")).join("");
+    return `#${hex[0] === hex[1] && hex[2] === hex[3] && hex[4] === hex[5] ? `${hex[0]}${hex[2]}${hex[4]}` : hex}`;
+  });
+  return compact.replace(/\s+/g, (spaces, index) => {
+    const before = compact[index - 1] ?? "";
+    const after = compact[index + spaces.length] ?? "";
+    // calc() needs spaces around binary +/-; quoted CSS is handled before this helper.
+    return /[:;,]/.test(before) || /[:;,]/.test(after) ? "" : " ";
+  });
+}
+
+function compressInlineCss(css: string): string {
+  let result = "";
+  let plain = "";
+  let quote = "";
+  let escaped = false;
+  const flushPlain = () => { result += compressPlainCss(plain); plain = ""; };
+  for (const character of css) {
+    if (quote) {
+      result += character;
+      if (!escaped && character === quote) quote = "";
+      escaped = !escaped && character === "\\";
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      flushPlain();
+      quote = character;
+      result += character;
+    } else {
+      plain += character;
+    }
+  }
+  flushPlain();
+  return result.trim().replace(/;$/, "");
+}
+
+/** Keeps article text untouched; only trusted template style attributes are compacted. */
+export function compressThemeHtml(html: string): string {
+  return html.replace(/\sstyle=(['"])([\s\S]*?)\1/gi, (_match, quote: string, css: string) => ` style=${quote}${compressInlineCss(css)}${quote}`);
+}
+
 function component(
   context: RenderContext,
   kind: ThemeNodeKind,
@@ -253,7 +298,7 @@ export function renderParsedTheme(
   const children = renderArticle(nodes, context, frontmatter);
   context.nodeCount += 1;
   return {
-    html: component(context, "document", { children }),
+    html: compressThemeHtml(component(context, "document", { children })),
     themeId: theme.manifest.id,
     themeVersion: theme.manifest.version,
     imageSources: context.imageSources,

@@ -63,8 +63,15 @@ test("WorkBuddy connection explanation lives in product settings", async () => {
   const main = await readFile(new URL("../src/main.ts", import.meta.url), "utf8");
   const settings = main.match(/class AgentSettingTab[\s\S]*?function cleanAssistantMarkdown/)?.[0] ?? "";
 
-  assert.match(settings, /WriteX 通过腾讯官方 codebuddy\/cbc CLI 连接 WorkBuddy/);
+  assert.match(settings, /连接 WorkBuddy/);
   assert.match(settings, /不会读取 WorkBuddy 桌面 App 的私有登录信息/);
-  assert.match(settings, /npm install -g @tencent-ai\/codebuddy-code/);
-  assert.match(settings, /运行 codebuddy 完成登录/);
+  assert.match(settings, /腾讯官方授权页/);
+  assert.match(settings, /官方 macOS 安装器/);
+  assert.match(settings, /查看官方安装说明/);
+  assert.match(settings, /process\.platform !== "darwin"/);
+  assert.match(settings, /refreshWorkBuddyAction\?\.\(\)/);
+  assert.match(settings, /已取消 WorkBuddy 连接，可重试/);
+  assert.match(settings, /已发现的 CLI 不会自动升级/);
+  assert.match(main, /WORKBUDDY_QUICKSTART_URL = "https:\/\/www\.codebuddy\.cn\/docs\/cli\/quickstart"/);
+  assert.match(main, /openWorkBuddyInstallInstructions\(\)[\s\S]*?openExternal\(WORKBUDDY_QUICKSTART_URL\)/);
 });

@@ -155,10 +155,10 @@ export async function routeTopicToChat(input: {
   openTarget: () => Promise<void>;
   activateChat: () => Promise<{ prepare: () => boolean } | null>;
 }): Promise<boolean> {
-  if (input.hasDraft()) return false;
   await input.openTarget();
   const chat = await input.activateChat();
   if (!chat) throw new Error("无法打开 WriteX Chat。");
+  if (input.hasDraft()) return false;
   return chat.prepare();
 }
 

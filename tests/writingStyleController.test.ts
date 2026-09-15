@@ -139,12 +139,12 @@ test("real recovery path guards preserve external target and stage", async t => 
   assert.equal(await readFile(stageRace.tempPath, "utf8"), "new");
 });
 
-test("topic routing binds the Markdown target before showing Chat and leaves a draft untouched", async () => {
+test("topic routing always opens the Markdown target and Chat, while preserving a target draft", async () => {
   const events: string[] = [];
-  assert.equal(await routeTopicToChat({ hasDraft: () => true, openTarget: async () => events.push("target"), activateChat: async () => ({ prepare: () => { events.push("prepare"); return true; } }) }), false);
-  assert.deepEqual(events, []);
+  assert.equal(await routeTopicToChat({ hasDraft: () => true, openTarget: async () => events.push("target"), activateChat: async () => { events.push("chat"); return { prepare: () => { events.push("prepare"); return true; } }; } }), false);
+  assert.deepEqual(events, ["target", "chat"]);
   assert.equal(await routeTopicToChat({ hasDraft: () => false, openTarget: async () => events.push("target"), activateChat: async () => { events.push("chat"); return { prepare: () => { events.push("prepare"); return true; } }; } }), true);
-  assert.deepEqual(events, ["target", "chat", "prepare"]);
+  assert.deepEqual(events, ["target", "chat", "target", "chat", "prepare"]);
 });
 
 test("selection replacement always checks its captured range even when another selection has identical text", () => {

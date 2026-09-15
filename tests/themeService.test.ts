@@ -84,7 +84,8 @@ test("ThemeService exposes built-ins immediately and never falls back for a miss
     assert.equal(service.getTheme("xiaohei").manifest.name, "小黑");
     assert.equal(service.listThemes().find(item => item.id === "default")?.error, undefined);
     assert.equal(service.listThemes().find(item => item.id === "xiaohei")?.error, undefined);
-    assert.match(service.render("正文", "xiaohei").html, /rgb\(89, 89, 89\)/);
+    assert.match(service.render("正文", "xiaohei").html, /#595959/);
+    assert.equal(service.getTheme("compact").manifest.name, "精简排版（扩容）");
     assert.throws(() => service.getTheme("missing"), error => error instanceof ThemeUnavailableError && error.themeId === "missing");
   });
 });

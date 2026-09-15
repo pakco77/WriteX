@@ -26,6 +26,7 @@ import {
   configuredAgentModel,
   setConfiguredAgentModel,
 } from "./chatAgents";
+import { agentModelOptions } from "./modelCatalog";
 import { writeClipboardText } from "./clipboard";
 import { splitAssistantMarkdownBlocks } from "./chatBlocks";
 import { validateChatAttachmentInputs } from "./chatAttachments";
@@ -43,11 +44,15 @@ import { buildFeedbackInstruction } from "./feedback";
 import { inspectImage, planWeChatImage } from "./images";
 import { describeImageProblem, galleryProblemSummary, missingImageInspection, type ImageProblem } from "./imageProblems";
 import { imageProviderLabel, resolveGeneratedProvider } from "./imageRouting";
-import { buildCutPrompt, sampleCutLenses, sortTopicsNewestFirst } from "./topics";
+import { sortTopicsNewestFirst } from "./topics";
 import { prepareSelectionComparison, SelectionCompareController } from "./selectionCompareController";
 import { buildStyleInstruction, sha256Text, styleEnabled } from "./writingStyle";
 import { WritingStyleModal } from "./writingStyleModal";
 import { ThemeLibraryModal } from "./themeLibraryModal";
+import { loadPreviewIfCurrent } from "./previewLoader";
+import { applyCompactTheme } from "./compactLayout";
+import { consumeCommittedComposerRequest, NoteComposerStates } from "./noteComposerState";
+import { OUTLINE_NEEDS_INPUT_MARKER, OUTLINE_READY_MARKER, parseOutlineResult } from "./outlineResult";
 import { assetIdempotencyKey, characterCount, uploadFileName } from "./wechatSync";
 import {
   buildExplicitSkillInstruction,
@@ -103,14 +108,8 @@ const OUTLINE_PROMPT = `你是一位「文章结构设计师」，擅长用「�
 
 工作边界与节奏：
 - 不直接替用户给出观点、经历、数据或论据；不要编造用户经历、数据或论据。材料不足时如实追问。
-- 当前笔记、选区、Chat 历史或系统提供的上下文都只是参考上下文，不算「本条用户消息在本说明之后附有的非空草稿/主题」。
-- 只有 OUTLINE_PROMPT 指令正文结束后，在同一个用户要求末尾明确出现额外的新草稿/主题文本，才视作 Step 1 回答；也就是说，若本条用户消息在本说明之后附有非空草稿或主题，把它当作 Step 1 的用户回答，直接做选题扫描，不重复首次开场。
-- 否则即使当前笔记已有正文，也必须使用首次开场；只有没有附带内容时才使用指定首次开场白：首次激活时只发开场问题，不要直接产出大纲，不要预演五步流程。首次回复必须是：
-  「你好，我是你的文章结构设计师。接下来我会通过一系列问题，帮你把一个模糊的选题，拆成一份可执行的文章大纲。
-
-  请告诉我：你今天要写的选题是什么？用一句话描述。
-
-  （不用担心说得不够好，越粗糙越好，我会帮你打磨。）」
+- 优先使用当前选区、当前笔记和当前对话里的真实材料；先从其中判断具体切口和已有论据，不要机械重复开场。
+- 材料不足或关键方向冲突时，才问 1–3 个必要问题；材料充分时可以直接产出可写大纲。
 - 后续严格一次只聚焦当前步骤和必要问题，等待用户回答后再继续；不要在一轮内把五步全跑完。每轮最多问当前步骤所需的 1–3 个问题。
 - 用户发散时，以「如果只能用一句话……」「最核心的一点是……」帮助收束；保留用户原话中的具体经验和判断，不把它替换成空泛模板。
 
@@ -231,7 +230,7 @@ Step 5：大纲成型 + 校准
 ## 写作建议
 - 根据大纲给出 3–5 条具体建议，例如第3段需要一个具体案例、第5段情绪需要再压低一点。
 
-最后问：「这个大纲是否符合你的预期？有没有哪一段你觉得需要调整方向、补充素材，或者情绪不对？我们可以继续打磨。」
+大纲完成且没有必须追问的缺口时，最后另起一行输出 ${OUTLINE_READY_MARKER}；材料不足时先输出必要问题，再在最后另起一行输出 ${OUTLINE_NEEDS_INPUT_MARKER}。
 
 核心原则：
 - 不直接给答案：永远用问题引导用户思考，让用户自己长出大纲。
@@ -239,6 +238,7 @@ Step 5：大纲成型 + 校准
 - 结构先行，文字后行：先确定骨架，再讨论具体内容。
 - 情绪可视化：每一段都标注情绪基调，让用户感知文章的呼吸感。
 - 可回包：最终大纲要能让用户用本质命题回包解释其他现象。`;
+
 
 const PREVIEW_DEVICE = { label: "iPhone 16", width: 375, height: 813, camera: "is-island" } as const;
 function errorMessage(error: unknown): string {
@@ -902,6 +902,7 @@ export class AgentView extends ItemView {
   private composerEl: HTMLTextAreaElement | null = null;
   private composerDraft = "";
   private composerAttachments: File[] = [];
+  private readonly noteComposerStates = new NoteComposerStates<File>();
   private running = false;
   private runningTask: RunningTask | null = null;
   private controller: AbortController | null = null;
@@ -913,6 +914,9 @@ export class AgentView extends ItemView {
   private imageProgressEl: HTMLElement | null = null;
   private imageMode = false;
   private chatMode: ChatMode = "chat";
+  private outlineSession = false;
+  private noteGeneration = 0;
+  private outlineGeneration = 0;
   private topicSavePending = new Set<string>();
   private pendingImageRequest: PendingImageRequest | null = null;
   private agentStatus: "checking" | "ready" | "missing" = "checking";
@@ -925,9 +929,11 @@ export class AgentView extends ItemView {
   private previewFilePath = "";
   private previewUpdatedAt = "未刷新";
   private previewTheme = "default";
+  private compactPreviewPending = false;
   private previewHtml = "";
   private previewRenderKey = "";
   private previewRenderError = "";
+  private previewLoadGeneration = 0;
   private unsubscribeThemeService: (() => void) | null = null;
   private previewScrollRatio = 0;
   private previewRefreshTimer = 0;
@@ -969,17 +975,16 @@ export class AgentView extends ItemView {
     this.registerEvent(this.app.workspace.on("file-open", file => {
       if (!(file instanceof TFile) || file.extension !== "md") return;
       if (file.path === this.notePath) return;
-      this.notePath = file.path;
-      this.selectionContext = null;
-      this.pendingImageRequest = null;
-      this.selectedAssetId = "";
-      this.resetPreviewState();
-      this.previewTheme = this.plugin.getNoteState(file.path).themeId ?? "default";
+      this.switchNote(file.path);
       this.render();
       void this.refreshSkills();
     }));
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
-      if (!(file instanceof TFile) || file.extension !== "md" || oldPath !== this.notePath) return;
+      if (!(file instanceof TFile) || file.extension !== "md") return;
+      const renamedCurrentNote = oldPath === this.notePath;
+      if (renamedCurrentNote) this.saveComposerState();
+      this.noteComposerStates.rename(oldPath, file.path);
+      if (!renamedCurrentNote) return;
       this.notePath = file.path;
       if (this.selectionContext?.filePath === oldPath) {
         this.selectionContext = { ...this.selectionContext, filePath: file.path, fileName: file.basename };
@@ -1021,28 +1026,23 @@ export class AgentView extends ItemView {
     this.clearImageDropHandlers?.();
     this.clearBlockDropHandlers?.();
     this.skillScanRequestId += 1;
+    this.noteComposerStates.clear();
   }
 
   syncActiveNote(): void {
     const file = this.app.workspace.getActiveFile();
     if (!(file instanceof TFile) || file.extension !== "md") return;
     if (file.path !== this.notePath) {
-      this.notePath = file.path;
-      this.selectionContext = null;
-      this.pendingImageRequest = null;
-      this.selectedAssetId = "";
-      this.resetPreviewState();
-      this.previewTheme = this.plugin.getNoteState(file.path).themeId ?? "default";
+      this.switchNote(file.path);
     }
     this.render();
   }
 
   setSelectionContext(context: SelectionContext, focusComposer = true): void {
     const noteChanged = this.notePath !== context.filePath;
-    this.notePath = context.filePath;
+    if (noteChanged) this.switchNote(context.filePath);
     if (noteChanged) {
       this.resetPreviewState();
-      this.previewTheme = this.plugin.getNoteState(context.filePath).themeId ?? "default";
     }
     this.selectionContext = context;
     this.activeTab = "chat";
@@ -1053,6 +1053,80 @@ export class AgentView extends ItemView {
 
   hasComposerDraft(): boolean {
     return Boolean((this.composerEl?.value ?? this.composerDraft).trim());
+  }
+
+  private saveComposerState(): void {
+    this.noteComposerStates.save(this.notePath, {
+      draft: this.composerEl?.value ?? this.composerDraft,
+      attachments: this.composerAttachments,
+      chatMode: this.chatMode,
+      outlineSession: this.outlineSession,
+    });
+  }
+
+  private switchNote(notePath: string): void {
+    if (notePath === this.notePath) return;
+    this.saveComposerState();
+    this.notePath = notePath;
+    const composer = this.noteComposerStates.load(notePath);
+    this.composerEl = null;
+    this.composerDraft = composer.draft;
+    this.composerAttachments = composer.attachments;
+    this.chatMode = composer.chatMode;
+    this.outlineSession = composer.outlineSession;
+    this.noteGeneration += 1;
+    this.outlineGeneration += 1;
+    this.selectionContext = null;
+    this.pendingImageRequest = null;
+    this.selectedAssetId = "";
+    this.compactPreviewPending = false;
+    this.resetPreviewState();
+    this.previewTheme = this.plugin.getNoteState(notePath).themeId ?? "default";
+  }
+
+  async openCopyPlanForNote(notePath: string): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(notePath);
+    if (!(file instanceof TFile) || file.extension !== "md") throw new Error("要复制的文章已移动或删除。");
+    const openLeaf = this.app.workspace.getLeavesOfType("markdown").find(leaf => (
+      leaf.view instanceof MarkdownView && leaf.view.file?.path === file.path
+    ));
+    if (openLeaf) this.app.workspace.revealLeaf(openLeaf);
+    else await this.app.workspace.getLeaf("tab").openFile(file);
+    this.switchNote(file.path);
+    this.activeTab = "chat";
+    await this.copyCurrentNote();
+  }
+
+  async previewCompactLayout(notePath: string): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(notePath);
+    if (!(file instanceof TFile) || file.extension !== "md") throw new Error("要预览的文章已移动或删除。");
+    this.switchNote(file.path);
+    this.previewTheme = "compact";
+    this.compactPreviewPending = true;
+    this.activeTab = "preview";
+    await this.loadPreview();
+    this.render();
+  }
+
+  private async applyCompactLayout(): Promise<void> {
+    if (!this.notePath || !this.compactPreviewPending) return;
+    const state = this.plugin.getNoteState(this.notePath);
+    try {
+      await applyCompactTheme({ state, persist: () => this.plugin.persist() });
+    } catch (error) { this.render(); throw error; }
+    this.compactPreviewPending = false;
+    this.previewTheme = "compact";
+    this.previewRenderKey = "";
+    this.render();
+    new Notice("已采用精简排版；同步前仍可继续预览或切回其他排版。");
+  }
+
+  private cancelCompactPreview(): void {
+    if (!this.notePath) return;
+    this.compactPreviewPending = false;
+    this.previewTheme = this.plugin.getNoteState(this.notePath).themeId ?? "default";
+    this.previewRenderKey = "";
+    this.render();
   }
 
   refreshWritingStyle(): void {
@@ -1249,18 +1323,6 @@ export class AgentView extends ItemView {
       outline.createSpan({ text: "大纲" });
       outline.disabled = this.running;
       outline.onclick = () => this.startOutline();
-      const cut = shortcuts.createEl("button", {
-        attr: {
-          type: "button",
-          "aria-label": "找切口：随机准备 3 个观察方向",
-          title: "从真实材料里随机找 3 个写作切口",
-        },
-      });
-      const cutIcon = cut.createSpan();
-      setIcon(cutIcon, "scan-search");
-      cut.createSpan({ text: "找切口" });
-      cut.disabled = this.running;
-      cut.onclick = () => this.startCutFinding();
       const image = shortcuts.createEl("button", {
         attr: {
           type: "button",
@@ -1322,6 +1384,7 @@ export class AgentView extends ItemView {
     autoGrow(textarea);
     textarea.oninput = () => {
       this.composerDraft = textarea.value;
+      this.saveComposerState();
       autoGrow(textarea);
     };
     textarea.onpaste = event => {
@@ -1339,7 +1402,7 @@ export class AgentView extends ItemView {
     const modeRow = form.createDiv({ cls: "oa-composer-mode-row" });
     const modelControls = modeRow.createDiv({ cls: "oa-model-controls" });
     const currentModel = configuredAgentModel(this.plugin.agentSettings, currentAgent);
-    const currentModelLabel = AGENT_MODELS[currentAgent].find(option => option.value === currentModel)?.label ?? "默认";
+    const currentModelLabel = agentModelOptions(currentAgent, this.plugin.data.discoveredAgentModels, currentModel).find(option => option.value === currentModel)?.label ?? "默认";
     const currentReasoning = configuredCodexReasoningEffort(this.plugin.agentSettings);
     const agentModelPicker = modelControls.createEl("button", {
       cls: "oa-agent-model-picker",
@@ -1360,8 +1423,9 @@ export class AgentView extends ItemView {
       const menu = new Menu();
       for (const [agentIndex, agentId] of CHAT_AGENT_IDS.entries()) {
         menu.addItem(item => item.setTitle(AGENT_LABELS[agentId]).setIsLabel(true));
-        for (const option of AGENT_MODELS[agentId]) {
-          const selected = agentId === currentAgent && option.value === currentModel;
+        const selectedModel = configuredAgentModel(this.plugin.agentSettings, agentId);
+        for (const option of agentModelOptions(agentId, this.plugin.data.discoveredAgentModels, selectedModel)) {
+          const selected = agentId === currentAgent && option.value === selectedModel;
           menu.addItem(item => item
             .setTitle(`${AGENT_LABELS[agentId]} · ${option.label}`)
             .setChecked(selected ? true : null)
@@ -1429,6 +1493,9 @@ export class AgentView extends ItemView {
     planSwitch.createSpan({ cls: "oa-plan-switch-track", attr: { "aria-hidden": "true" } });
     planInput.onchange = () => {
       this.chatMode = planInput.checked ? "plan" : "chat";
+      this.outlineSession = false;
+      this.outlineGeneration += 1;
+      this.saveComposerState();
       this.render();
       window.setTimeout(() => this.composerEl?.focus(), 0);
     };
@@ -1520,6 +1587,7 @@ export class AgentView extends ItemView {
         if (this.composerEl) {
           this.composerEl.value = text;
           this.composerDraft = text;
+          this.saveComposerState();
           autoGrow(this.composerEl);
           this.composerEl.focus();
         }
@@ -1536,6 +1604,7 @@ export class AgentView extends ItemView {
       return;
     }
     this.composerAttachments = next;
+    this.saveComposerState();
     this.render();
     window.setTimeout(() => this.composerEl?.focus(), 0);
   }
@@ -1555,6 +1624,7 @@ export class AgentView extends ItemView {
       setIcon(remove, "x");
       remove.onclick = () => {
         this.composerAttachments.splice(index, 1);
+        this.saveComposerState();
         this.render();
         window.setTimeout(() => this.composerEl?.focus(), 0);
       };
@@ -1562,11 +1632,33 @@ export class AgentView extends ItemView {
   }
 
   private startOutline(): void {
-    this.prepareComposerDraft(OUTLINE_PROMPT, { plan: true, prefix: true });
+    const switchedFromChat = this.chatMode === "chat";
+    if (this.prepareComposerDraft(OUTLINE_PROMPT, { plan: true, prefix: true })) {
+      this.outlineSession = switchedFromChat;
+      this.outlineGeneration += 1;
+      this.saveComposerState();
+    }
   }
 
-  private startCutFinding(): void {
-    this.prepareComposerDraft(buildCutPrompt(sampleCutLenses()), { plan: true, prefix: true });
+  private async collectOutlineRelatedContext(file: TFile, selection?: string): Promise<{ context: string; paths: string[] }> {
+    const query = `${file.basename}\n${selection ?? ""}`;
+    const words = query.match(/[\p{Script=Han}]{2,}|[A-Za-z0-9][A-Za-z0-9_-]{1,}/gu) ?? [];
+    const terms = [...new Set(words.flatMap(word => {
+      if (/^[\p{Script=Han}]+$/u.test(word)) return [word, ...Array.from({ length: Math.max(0, word.length - 1) }, (_, index) => word.slice(index, index + 2))];
+      return [word];
+    }).filter(term => term.length >= 2))].slice(0, 8);
+    if (!terms.length) return { context: "", paths: [] };
+    const matches = this.app.vault.getMarkdownFiles()
+      .filter(candidate => candidate.path !== file.path && terms.some(term => candidate.basename.includes(term)))
+      .sort((left, right) => left.path.localeCompare(right.path))
+      .slice(0, 3);
+    const materials: string[] = [];
+    const paths: string[] = [];
+    for (const candidate of matches) {
+      const text = markdownToPlainText(await this.app.vault.cachedRead(candidate)).slice(0, 1200).trim();
+      if (text) { materials.push(`- 来源：${candidate.path}\n  ${text}`); paths.push(candidate.path); }
+    }
+    return materials.length ? { context: `相关本地笔记（标题匹配，最多 3 篇）：\n${materials.join("\n")}`, paths } : { context: "", paths: [] };
   }
 
   private prepareComposerDraft(target: string, options: { plan?: boolean; prefix?: boolean; beforeApply?: () => void } = {}): boolean {
@@ -1579,6 +1671,7 @@ export class AgentView extends ItemView {
     options.beforeApply?.();
     if (options.plan) this.chatMode = "plan";
     this.composerDraft = options.prefix && current ? `${target}\n\n${current}` : target;
+    this.saveComposerState();
     this.render();
     window.setTimeout(() => this.composerEl?.focus(), 0);
     return true;
@@ -1590,6 +1683,8 @@ export class AgentView extends ItemView {
       : `请基于这个选题继续创作：\n\n${topic.content}`;
     return this.prepareComposerDraft(prompt, {
       beforeApply: () => {
+        this.outlineSession = false;
+        this.outlineGeneration += 1;
         this.activeTab = "chat";
         this.imageMode = false;
       },
@@ -1651,6 +1746,8 @@ export class AgentView extends ItemView {
     meta.createEl("time", { text: formatTime(message.createdAt) });
     if (message.model) meta.createSpan({ cls: "oa-message-provenance", text: message.model });
     if (message.reasoningEffort) meta.createSpan({ cls: "oa-message-provenance", text: `推理${codexReasoningLabel(message.reasoningEffort)}` });
+    if (message.webSearchCount) meta.createSpan({ cls: "oa-message-provenance", text: `本轮进行了 ${message.webSearchCount} 次网页检索` });
+    if (message.relatedNotePaths?.length) meta.createSpan({ cls: "oa-message-provenance", text: `参考笔记：${message.relatedNotePaths.join("、")}` });
     if (message.skill) {
       const skill = meta.createSpan({ cls: "oa-message-mode", text: message.skill.name });
       skill.setAttribute("title", `${message.skill.path}\nSHA-256 ${message.skill.sourceHash}`);
@@ -2038,7 +2135,7 @@ export class AgentView extends ItemView {
 
   private renderPreview(container: HTMLElement): void {
     const state = this.plugin.getNoteState(this.notePath);
-    const currentThemeId = state.themeId ?? "default";
+    const currentThemeId = this.compactPreviewPending ? "compact" : state.themeId ?? "default";
     this.previewTheme = currentThemeId;
     const themes = this.plugin.themeService.listThemes();
     const toolbar = container.createDiv({ cls: "oa-preview-toolbar" });
@@ -2064,6 +2161,12 @@ export class AgentView extends ItemView {
       cls: this.isPreviewThemeReady() ? "" : "is-stale",
       text: `${currentTheme?.name ?? currentThemeId} · ${currentStatus} · ${this.previewUpdatedAt} · 自动同步`,
     });
+    if (this.compactPreviewPending) {
+      const apply = toolbar.createEl("button", { cls: "mod-cta", text: "采用精简排版", attr: { type: "button" } });
+      apply.onclick = () => void this.applyCompactLayout().catch(error => new Notice(errorMessage(error)));
+      const cancel = toolbar.createEl("button", { text: "保留原排版", attr: { type: "button" } });
+      cancel.onclick = () => this.cancelCompactPreview();
+    }
 
     if (currentTheme && ["waiting", "failed"].includes(currentTheme.status)) {
       const retry = toolbar.createEl("button", { text: "重试", attr: { type: "button" } });
@@ -2150,6 +2253,7 @@ export class AgentView extends ItemView {
       }
       this.plugin.themeService.getTheme(selectedId);
       state.themeId = selectedId;
+      this.compactPreviewPending = false;
       this.previewTheme = selectedId;
       this.previewRenderKey = "";
       this.previewRenderError = "";
@@ -2208,6 +2312,10 @@ export class AgentView extends ItemView {
     }
     this.render();
     return true;
+  }
+
+  async refreshAgentConnectionStatus(): Promise<void> {
+    await this.checkAgent();
   }
 
   private async refreshSkills(refresh = false): Promise<void> {
@@ -2304,6 +2412,10 @@ export class AgentView extends ItemView {
     this.composerDraft = "";
     this.composerAttachments = [];
     this.pendingImageRequest = null;
+    this.outlineSession = false;
+    this.noteGeneration += 1;
+    this.outlineGeneration += 1;
+    this.saveComposerState();
     this.selectionContext = this.plugin.captureActiveSelection();
     this.activeTab = "chat";
     this.render();
@@ -2313,6 +2425,16 @@ export class AgentView extends ItemView {
     const request = raw.trim();
     const queuedAttachments = [...this.composerAttachments];
     if ((!request && !queuedAttachments.length) || !this.notePath) return;
+    let requestNotePath = this.notePath;
+    let requestGeneration = this.noteGeneration;
+    let context = this.selectionContext ? { ...this.selectionContext } : undefined;
+    const requestedTurnMode = this.imageMode ? "chat" : this.chatMode;
+    const requestComposerState = {
+      draft: this.composerEl?.value ?? this.composerDraft,
+      attachments: queuedAttachments,
+      chatMode: this.chatMode,
+      outlineSession: this.outlineSession,
+    };
     const agent = this.plugin.agentSettings.activeChatAgent;
     const imageRequest = this.imageMode;
     if (imageRequest ? this.imageRunning : this.running) return;
@@ -2330,13 +2452,15 @@ export class AgentView extends ItemView {
         return;
       }
     }
-    let file = this.app.vault.getAbstractFileByPath(this.notePath);
+    let file = this.app.vault.getAbstractFileByPath(requestNotePath);
     if (!(file instanceof TFile)) {
       const activeFile = this.app.workspace.getActiveFile();
       if (activeFile instanceof TFile && activeFile.extension === "md") {
-        const oldPath = this.notePath;
+        const oldPath = requestNotePath;
         await this.plugin.rebindNotePath(oldPath, activeFile.path);
-        this.notePath = activeFile.path;
+        requestNotePath = activeFile.path;
+        if (this.notePath === oldPath) this.switchNote(activeFile.path);
+        requestGeneration = this.noteGeneration;
         if (this.selectionContext?.filePath === oldPath) {
           this.selectionContext = { ...this.selectionContext, filePath: activeFile.path, fileName: activeFile.basename };
         } else {
@@ -2350,8 +2474,7 @@ export class AgentView extends ItemView {
       new Notice("当前 Markdown 笔记已经移动或删除。");
       return;
     }
-    const state = this.plugin.getNoteState(this.notePath);
-    const context = this.selectionContext ? { ...this.selectionContext } : undefined;
+    const state = this.plugin.getNoteState(requestNotePath);
     const model = configuredAgentModel(this.plugin.agentSettings, agent);
     const reasoningEffort = agent === "codex" ? configuredCodexReasoningEffort(this.plugin.agentSettings) : "";
     const activeSkill = findLocalSkillByPath(this.localSkills, state.activeSkillPath);
@@ -2371,17 +2494,17 @@ export class AgentView extends ItemView {
       revision: writingStyleProfile.revision,
       sourceHash: sha256Text(writingStyleProfile.markdown),
     } : undefined;
-    const turnMode = imageRequest ? "chat" : this.chatMode;
+    const turnMode = requestedTurnMode;
+    const outlineGeneration = this.outlineGeneration;
+    const outlineSession = !imageRequest && this.outlineSession && turnMode === "plan";
     const userMessageId = createId("message");
     let attachments: ChatAttachment[] = [];
     try {
-      if (queuedAttachments.length) attachments = await this.plugin.stageChatAttachments(this.notePath, userMessageId, queuedAttachments);
+      if (queuedAttachments.length) attachments = await this.plugin.stageChatAttachments(requestNotePath, userMessageId, queuedAttachments);
     } catch (error) {
       new Notice(errorMessage(error));
       return;
     }
-    this.composerDraft = "";
-    this.composerAttachments = [];
     state.messages.push({
       id: userMessageId,
       role: "user",
@@ -2397,10 +2520,31 @@ export class AgentView extends ItemView {
       skill: skillSnapshot,
     });
     await this.plugin.persist();
+    const clearedRequestComposer = consumeCommittedComposerRequest({
+      states: this.noteComposerStates,
+      requestNotePath,
+      request: requestComposerState,
+      active: {
+        notePath: this.notePath,
+        state: {
+          draft: this.composerEl?.value ?? this.composerDraft,
+          attachments: this.composerAttachments,
+          chatMode: this.chatMode,
+          outlineSession: this.outlineSession,
+        },
+      },
+    });
+    if (clearedRequestComposer) {
+      this.composerDraft = "";
+      this.composerAttachments = [];
+      if (this.composerEl) this.composerEl.value = "";
+      this.saveComposerState();
+    }
     if (imageRequest) {
+      if (this.notePath !== requestNotePath || this.noteGeneration !== requestGeneration) return;
       this.imageMode = false;
       this.pendingImageRequest = {
-        notePath: this.notePath,
+        notePath: requestNotePath,
         prompt: [
           activeSkill ? buildExplicitSkillInstruction(activeSkill) : "",
           request,
@@ -2426,15 +2570,18 @@ export class AgentView extends ItemView {
     const controller = new AbortController();
     this.controller = controller;
     this.render();
+    let turnSucceeded = false;
     try {
       const noteContent = await this.app.vault.cachedRead(file);
+      const related = outlineSession ? await this.collectOutlineRelatedContext(file, context?.text) : { context: "", paths: [] };
+      const conversationContext = outlineSession ? state.messages.slice(-6).map(message => `${message.role === "user" ? "用户" : "助手"}：${message.content}`).join("\n") : "";
       const attachmentContext = attachments.map(attachment => ({
         ...attachment,
         absolutePath: join(this.plugin.getVaultBasePath(), attachment.filePath),
       }));
       const prompt = buildWritingPrompt({
         request: request || "请阅读我附上的文件，并告诉我其中最值得继续写的内容。",
-        filePath: this.notePath,
+        filePath: requestNotePath,
         noteContent,
         selection: context?.text,
         maxContextChars: this.plugin.agentSettings.maxContextChars,
@@ -2443,7 +2590,11 @@ export class AgentView extends ItemView {
         styleInstruction: buildStyleInstruction(writingStyleProfile),
         feedbackInstruction: buildFeedbackInstruction(this.plugin.data.feedbackMemory, agent, activeSkill?.name),
         attachments: attachmentContext,
+        allowWebSearch: agent === "codex" && this.plugin.agentSettings.codexWebSearchEnabled,
+        relatedContext: related.context,
+        conversationContext,
       });
+      const relatedNotePaths = related.paths.filter(path => prompt.includes(`来源：${path}`));
       await runAndRecordAssistant(() => this.plugin.chatRuntime.runTurn({
         agent,
         cwd: this.plugin.getVaultBasePath(),
@@ -2455,26 +2606,37 @@ export class AgentView extends ItemView {
           .map(attachment => join(this.plugin.getVaultBasePath(), attachment.filePath)),
         signal: controller.signal,
       }), result => {
+        turnSucceeded = true;
+        const outlineResult = outlineSession ? parseOutlineResult(result.text) : { text: result.text, ready: false };
+        const completedOutline = outlineResult.ready;
+        const text = outlineResult.text;
         setAgentSession(state, agent, result.threadId);
         state.messages.push({
           id: createId("message"),
           role: "assistant",
           kind: "text",
-          content: result.text,
+          content: text,
           createdAt: Date.now(),
           context,
           mode: turnMode,
           agent,
           model: model || "默认",
           reasoningEffort: reasoningEffort || undefined,
+          webSearchCount: result.webSearchCount || undefined,
+          relatedNotePaths: relatedNotePaths.length ? relatedNotePaths : undefined,
           skill: skillSnapshot,
           writingStyle: writingStyleSnapshot,
         });
+        if (completedOutline && this.outlineSession && this.controller === controller && this.notePath === requestNotePath && this.noteGeneration === requestGeneration && this.outlineGeneration === outlineGeneration) {
+          this.outlineSession = false;
+          this.chatMode = "chat";
+        }
       });
       await this.plugin.persist();
     } catch (error) {
       if (!controller.signal.aborted) new Notice(errorMessage(error));
     } finally {
+      if (outlineSession && !turnSucceeded && this.controller === controller && this.notePath === requestNotePath && this.noteGeneration === requestGeneration && this.outlineGeneration === outlineGeneration) this.outlineSession = false;
       this.running = false;
       this.runningTask = null;
       this.controller = null;
@@ -2600,6 +2762,7 @@ export class AgentView extends ItemView {
   }
 
   private stopRun(): void {
+    this.outlineSession = false;
     this.controller?.abort();
   }
 
@@ -2698,23 +2861,34 @@ export class AgentView extends ItemView {
   }
 
   private async refreshPreview(): Promise<void> {
-    await this.loadPreview();
+    const loaded = await this.loadPreview();
+    if (!loaded) return;
     this.render();
     new Notice("公众号预览已刷新。");
   }
 
-  private async loadPreview(): Promise<void> {
-    const file = this.app.vault.getAbstractFileByPath(this.notePath);
-    if (!(file instanceof TFile)) return;
-    this.previewMarkdown = await this.app.vault.cachedRead(file);
-    this.previewFilePath = file.path;
-    this.previewUpdatedAt = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
+  private async loadPreview(): Promise<boolean> {
+    const notePath = this.notePath;
+    const file = this.app.vault.getAbstractFileByPath(notePath);
+    if (!(file instanceof TFile)) return false;
+    const generation = ++this.previewLoadGeneration;
+    return loadPreviewIfCurrent({
+      notePath,
+      generation,
+      isCurrent: (path, token) => this.notePath === path && this.previewLoadGeneration === token,
+      read: () => this.app.vault.cachedRead(file),
+      commit: markdown => {
+        this.previewMarkdown = markdown;
+        this.previewFilePath = file.path;
+        this.previewUpdatedAt = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
+      },
+    });
   }
 
   private async copyCurrentNote(): Promise<void> {
-    await this.loadPreview();
+    if (!await this.loadPreview()) return;
     await this.copyPreview();
-    this.render();
+    if (this.notePath === this.previewFilePath) this.render();
   }
 
   private resolveImage(source: string): string {
@@ -3148,6 +3322,7 @@ export class AgentView extends ItemView {
 
   private isPreviewThemeReady(): boolean {
     if (!this.notePath) return false;
+    if (this.compactPreviewPending) return false;
     try {
       this.plugin.themeService.getTheme(this.plugin.getNoteState(this.notePath).themeId ?? "default");
       return true;
@@ -3157,6 +3332,7 @@ export class AgentView extends ItemView {
   }
 
   private resetPreviewState(): void {
+    this.previewLoadGeneration += 1;
     this.previewMarkdown = "";
     this.previewFilePath = "";
     this.previewUpdatedAt = "未刷新";

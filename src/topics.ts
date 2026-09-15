@@ -150,12 +150,21 @@ export function deleteTopicRecord(topics: TopicIdea[], topicId: string): TopicId
 export function moveTopicSourcePaths(topics: TopicIdea[], oldPath: string, newPath: string): boolean {
   let moved = false;
   for (const topic of topics) {
-    if (topic.sourceNotePath !== oldPath) continue;
-    topic.sourceNotePath = newPath;
-    moved = true;
+    if (topic.sourceNotePath === oldPath) { topic.sourceNotePath = newPath; moved = true; }
+    if (topic.articleNotePath === oldPath) { topic.articleNotePath = newPath; moved = true; }
   }
   return moved;
 }
+
+export function setTopicArticlePath(topics: TopicIdea[], topicId: string, articleNotePath: string, now: () => number = Date.now): TopicIdea {
+  const topic = requireTopic(topics, topicId);
+  const path = articleNotePath.trim();
+  if (!path) throw new Error("请选择一篇 Markdown 文章。");
+  topic.articleNotePath = path;
+  topic.updatedAt = now();
+  return topic;
+}
+
 
 export const CUT_LENSES = [
   "具体物件",

@@ -7,6 +7,7 @@ import {
   deleteTopicRecord,
   findTopicBySourceMessage,
   moveTopicSourcePaths,
+  setTopicArticlePath,
   normalizeTopicTitle,
   renameTopicRecord,
   sampleCutLenses,
@@ -100,6 +101,16 @@ test("manual topics validate Unicode length and keep optional note provenance", 
 
   const withoutNote = createManualTopic([], "纯手动记录", undefined, () => "manual-2", () => 20);
   assert.equal("sourceNotePath" in withoutNote, false);
+});
+
+test("topic article association is separate from source and follows a rename", () => {
+  const topic = createManualTopic([], "选题", "素材.md", () => "topic-article", () => 10);
+  const topics = [topic];
+  setTopicArticlePath(topics, topic.id, "文章/成稿.md", () => 20);
+  assert.equal(topic.sourceNotePath, "素材.md");
+  assert.equal(topic.articleNotePath, "文章/成稿.md");
+  assert.equal(moveTopicSourcePaths(topics, "文章/成稿.md", "文章/改名.md"), true);
+  assert.equal(topic.articleNotePath, "文章/改名.md");
 });
 
 test("cut lenses are exactly three unique local choices and produce a bounded prompt", () => {

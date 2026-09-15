@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { searchDraftForTopicActivation, saveQuickTopicInput, shouldSaveQuickTopicOnKey, shouldScrollFocusedTopic } from "../src/topicLibraryController.ts";
+import { searchDraftForTopicActivation, saveQuickTopicInput, shouldSaveQuickTopicOnKey, shouldScrollFocusedTopic, topicArticleFileName } from "../src/topicLibraryController.ts";
 
 test("quick topic input preserves IME composition and supports consecutive Chinese and English saves", async () => {
   assert.equal(shouldSaveQuickTopicOnKey("Enter", true), false);
@@ -34,4 +34,9 @@ test("focusing a topic clears a stale local search so its card can render and sc
   assert.equal(searchDraftForTopicActivation("保留搜索", undefined), "保留搜索");
   assert.equal(shouldScrollFocusedTopic("topic-hidden", "topic-hidden"), true);
   assert.equal(shouldScrollFocusedTopic("other", "topic-hidden"), false);
+});
+
+test("new article names remain one Markdown filename and cannot escape the configured folder", () => {
+  assert.equal(topicArticleFileName("路径/../../草稿:一"), "路径-草稿-一.md");
+  assert.equal(topicArticleFileName("  "), "未命名文章.md");
 });

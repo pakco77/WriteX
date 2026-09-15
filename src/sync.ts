@@ -20,6 +20,7 @@ import {
   buildConfirmationSummary,
   computeContentHash,
   characterCount,
+  measureWeChatContent,
   MAX_TITLE_GRAPHEMES,
   preflightDraft,
   resolveCoverPath,
@@ -29,6 +30,7 @@ import {
   type DraftMetadata,
   type PreflightIssue,
 } from "./wechatSync";
+import { formatBytes } from "./copyPlan";
 import { extractMarkdownImageSources } from "./wechat";
 import { WriteRelayClient, type RelayTransport } from "./writeRelay";
 import { WriteCloudClient, type CloudQuote, type CloudTransport } from "./writeCloud";
@@ -590,10 +592,15 @@ class WeChatSyncModal extends Modal {
   private renderMeta(container: HTMLElement): void {
     const grid = container.createDiv({ cls: "oa-sync-grid" });
     const themeLabel = this.prepared?.rendererLabel ?? this.themeId;
+    const metrics = this.prepared
+      ? measureWeChatContent(this.prepared.html)
+      : { visibleBodyCharacters: 0, htmlCharacters: 0, htmlBytes: 0 };
     for (const [label, value] of [
       ["文章", this.prepared?.metadata.title ?? ""],
       ["笔记", this.notePath],
       ["排版", themeLabel],
+      ["可见正文", `${metrics.visibleBodyCharacters} 字`],
+      ["排版 HTML", `${metrics.htmlCharacters}/20000 字符 · ${formatBytes(metrics.htmlBytes)} / 1.00 MB`],
       ["正文图片", `${this.prepared?.contentAssets.length ?? 0} 张`],
     ]) {
       const row = grid.createDiv({ cls: "oa-sync-grid-row" });
@@ -648,6 +655,20 @@ class WeChatSyncModal extends Modal {
         cls: `oa-sync-issue is-${issue.level}`,
         text: `${label} · ${issue.message}${issue.assetPath ? `（${issue.assetPath}）` : ""}`,
       });
+    }
+    if (this.prepared.issues.some(issue => issue.code === "content_too_long")) {
+      const actions = list.createDiv({ cls: "oa-sync-remote-actions" });
+      actions.createEl("p", { text: "精简排版会保留文章语义、移除装饰性内联样式；请先在预览中确认效果。" });
+      const compact = actions.createEl("button", { text: "精简排版并预览", attr: { type: "button" } });
+      compact.onclick = () => {
+        this.close();
+        void this.plugin.activateView().then(view => view?.previewCompactLayout(this.notePath));
+      };
+      const copy = actions.createEl("button", { text: "转为复制微信格式", attr: { type: "button" } });
+      copy.onclick = () => {
+        this.close();
+        void this.plugin.activateView().then(view => view?.openCopyPlanForNote(this.notePath));
+      };
     }
     if (this.prepared.remoteImages.length) {
       const actions = list.createDiv({ cls: "oa-sync-remote-actions" });
@@ -754,6 +775,14 @@ class WeChatSyncModal extends Modal {
     panel.createEl("p", {
       text: "微信草稿正文 API 只接受小于 1 MB 的 JPG/PNG。继续会生成静态替代图，原 GIF 保留在 Vault，但草稿正文中的动画会丢失。",
     });
+    const copy = panel.createEl("button", {
+      text: "转为复制微信格式",
+      attr: { type: "button" },
+    });
+    copy.onclick = () => {
+      this.close();
+      void this.plugin.activateView().then(view => view?.openCopyPlanForNote(this.notePath));
+    };
     const button = panel.createEl("button", {
       text: "我确认生成静态替代图",
       attr: { type: "button" },

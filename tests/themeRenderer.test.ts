@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { BUILTIN_THEMES } from "../src/themeBuiltins.ts";
 import {
+  compressThemeHtml,
   ThemeRenderError,
   renderTheme,
 } from "../src/themeRenderer.ts";
@@ -18,6 +19,16 @@ test("preview and copy resolvers change only image src", () => {
   assert.equal(normalizeSrc(preview.html), normalizeSrc(copy.html));
   assert.deepEqual(preview.imageSources, ["a.png"]);
   assert.deepEqual(copy.imageSources, ["a.png"]);
+});
+
+test("shared theme compression only changes safe inline CSS syntax", () => {
+  const source = `<p style=' color: rgb(255, 0, 0); font-family: A B; font-family: "C D"; width: calc(100% - (2px + 3px)); '>正文 <code> a  b </code></p>`;
+  const html = compressThemeHtml(source);
+  assert.match(html, /color:#f00/);
+  assert.match(html, /font-family:A B/);
+  assert.match(html, /font-family:\"C D\"/);
+  assert.match(html, /width:calc\(100% - \(2px \+ 3px\)\)/);
+  assert.match(html, /<code> a  b <\/code>/);
 });
 
 test("user text and image attributes cannot escape trusted templates", () => {

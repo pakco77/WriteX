@@ -81,6 +81,8 @@ export interface ChatMessage {
   agent?: ChatAgentId;
   model?: string;
   reasoningEffort?: Exclude<CodexReasoningEffort, "">;
+  webSearchCount?: number;
+  relatedNotePaths?: string[];
   skill?: ChatSkillSnapshot;
   writingStyle?: WritingStyleSnapshot;
   feedback?: "up" | "down";
@@ -101,6 +103,31 @@ export interface ChatFeedbackMemoryEntry {
 
 export type TopicStatus = "idea" | "writing" | "done";
 export type TopicSourceKind = "manual" | "chat";
+export type TopicDecisionValue = "adopt" | "defer" | "dismiss";
+export interface TopicRating {
+  stars: 1 | 2 | 3 | 4 | 5;
+  detail: string;
+  suggestion?: string;
+  agent: ChatAgentId;
+  model: string;
+  profileHash: string;
+  analyzedAt: number;
+}
+export interface TopicDecision {
+  value: TopicDecisionValue;
+  reason?: string;
+  correction?: string;
+  updatedAt: number;
+}
+export interface TopicPositioningProfile {
+  path: string;
+  contentHash: string;
+  updatedAt: number;
+}
+export interface DiscoveredAgentModels {
+  fetchedAt: number;
+  models: Array<{ value: string; label: string }>;
+}
 
 export interface TopicIdea {
   id: string;
@@ -108,12 +135,16 @@ export interface TopicIdea {
   content: string;
   sourceKind: TopicSourceKind;
   sourceNotePath?: string;
+  articleNotePath?: string;
   sourceMessageId?: string;
   sourceAgent?: ChatAgentId;
   sourceModel?: string;
   createdAt: number;
   updatedAt: number;
   status?: TopicStatus;
+  rating?: TopicRating;
+  ratingStale?: boolean;
+  decision?: TopicDecision;
 }
 
 export interface ArchivedConversation {
@@ -249,10 +280,13 @@ export interface AgentSettings {
   codexPath: string;
   codexModel: string;
   codexReasoningEffort: CodexReasoningEffort;
+  codexWebSearchEnabled: boolean;
   claudePath: string;
   claudeModel: string;
   workbuddyPath: string;
   workbuddyModel: string;
+  topicAnalysisAgent: ChatAgentId;
+  topicAnalysisModel: string;
   maxContextChars: number;
   imageModel: string;
   imageSize: ImageSize;
@@ -277,6 +311,8 @@ export interface PersistedData {
   wechatImageCache?: Record<string, WeChatImageCacheEntry>;
   relayAccountBindings?: Record<string, RelayAccountBinding>;
   writingStyleProfile?: WritingStyleProfile;
+  topicPositioningProfile?: TopicPositioningProfile;
+  discoveredAgentModels?: Partial<Record<ChatAgentId, DiscoveredAgentModels>>;
 }
 
 export interface WeChatImageCacheEntry {
@@ -300,10 +336,13 @@ export const DEFAULT_SETTINGS: AgentSettings = {
   codexPath: "",
   codexModel: "",
   codexReasoningEffort: "",
+  codexWebSearchEnabled: false,
   claudePath: "",
   claudeModel: "",
   workbuddyPath: "",
   workbuddyModel: "",
+  topicAnalysisAgent: "codex",
+  topicAnalysisModel: "",
   maxContextChars: 30000,
   imageModel: "gpt-image-2",
   imageSize: "1536x1024",
@@ -322,8 +361,13 @@ export const DEFAULT_SETTINGS: AgentSettings = {
 export function migrateSettings(value: Partial<AgentSettings> | null | undefined): AgentSettings {
   const settings = { ...DEFAULT_SETTINGS, ...(value ?? {}) };
   if (!["codex", "claude", "workbuddy"].includes(settings.activeChatAgent)) settings.activeChatAgent = "codex";
-  if (!["", "gpt-5.6-sol", "gpt-5.6-terra"].includes(settings.codexModel)) settings.codexModel = "";
+  if (typeof settings.codexModel !== "string") settings.codexModel = "";
+  if (typeof settings.claudeModel !== "string") settings.claudeModel = "";
+  if (typeof settings.workbuddyModel !== "string") settings.workbuddyModel = "";
+  if (!["codex", "claude", "workbuddy"].includes(settings.topicAnalysisAgent)) settings.topicAnalysisAgent = "codex";
+  if (typeof settings.topicAnalysisModel !== "string") settings.topicAnalysisModel = "";
   if (!["", "low", "medium", "high", "xhigh", "max", "ultra"].includes(settings.codexReasoningEffort)) settings.codexReasoningEffort = "";
+  if (typeof settings.codexWebSearchEnabled !== "boolean") settings.codexWebSearchEnabled = false;
   if (!["1024x1024", "1536x1024", "1024x1536"].includes(settings.imageSize)) settings.imageSize = DEFAULT_SETTINGS.imageSize;
   if (!["self-hosted", "write-cloud"].includes(settings.syncRoute)) settings.syncRoute = "self-hosted";
   if (typeof settings.cloudUrl !== "string" || !settings.cloudUrl.trim()) settings.cloudUrl = DEFAULT_SETTINGS.cloudUrl;
@@ -374,6 +418,49 @@ function migrateWritingStyleProfile(value: unknown): WritingStyleProfile | undef
   };
 }
 
+function migrateTopicRating(value: unknown): TopicRating | undefined {
+  if (!isRecord(value)
+    || typeof value.stars !== "number" || !Number.isInteger(value.stars) || value.stars < 1 || value.stars > 5
+    || typeof value.detail !== "string" || !value.detail.trim()
+    || !["codex", "claude", "workbuddy"].includes(value.agent as string)
+    || typeof value.model !== "string"
+    || typeof value.profileHash !== "string" || !value.profileHash.trim()
+    || typeof value.analyzedAt !== "number" || !Number.isFinite(value.analyzedAt)) return undefined;
+  return {
+    stars: value.stars as TopicRating["stars"],
+    detail: value.detail.trim(),
+    ...(typeof value.suggestion === "string" && value.suggestion.trim() ? { suggestion: value.suggestion.trim() } : {}),
+    agent: value.agent as ChatAgentId,
+    model: value.model,
+    profileHash: value.profileHash,
+    analyzedAt: value.analyzedAt,
+  };
+}
+
+function migrateTopicDecision(value: unknown): TopicDecision | undefined {
+  if (!isRecord(value)
+    || !["adopt", "defer", "dismiss"].includes(value.value as string)
+    || typeof value.updatedAt !== "number" || !Number.isFinite(value.updatedAt)) return undefined;
+  return {
+    value: value.value as TopicDecisionValue,
+    ...(typeof value.reason === "string" && value.reason.trim() ? { reason: value.reason.trim() } : {}),
+    ...(typeof value.correction === "string" && value.correction.trim() ? { correction: value.correction.trim() } : {}),
+    updatedAt: value.updatedAt,
+  };
+}
+
+function migrateTopic(value: Record<string, unknown>): TopicIdea {
+  const { rating: rawRating, decision: rawDecision, ratingStale: rawRatingStale, ...legacy } = value;
+  const rating = migrateTopicRating(rawRating);
+  const decision = migrateTopicDecision(rawDecision);
+  return {
+    ...legacy,
+    sourceKind: value.sourceKind === "manual" ? "manual" : "chat",
+    ...(rating ? { rating, ...(typeof rawRatingStale === "boolean" ? { ratingStale: rawRatingStale } : {}) } : {}),
+    ...(decision ? { decision } : {}),
+  } as unknown as TopicIdea;
+}
+
 export function migratePersistedData(value: unknown): PersistedData {
   const source = isRecord(value) ? structuredClone(value) : {};
   delete source.writingStyleProfile;
@@ -398,12 +485,22 @@ export function migratePersistedData(value: unknown): PersistedData {
     } as NoteState;
   }
   const topics = Array.isArray(source.topics)
-    ? source.topics.filter(isRecord).map(topic => ({
-      ...topic,
-      sourceKind: topic.sourceKind === "manual" ? "manual" : "chat",
-    })) as unknown as TopicIdea[]
+    ? source.topics.filter(isRecord).map(migrateTopic)
     : [];
   const writingStyleProfile = migrateWritingStyleProfile(rawWritingStyleProfile);
+  const rawPositioning = isRecord(value) ? value.topicPositioningProfile : undefined;
+  const topicPositioningProfile = isRecord(rawPositioning) && typeof rawPositioning.path === "string" && rawPositioning.path.trim() && typeof rawPositioning.contentHash === "string"
+    ? { path: rawPositioning.path, contentHash: rawPositioning.contentHash, updatedAt: typeof rawPositioning.updatedAt === "number" ? rawPositioning.updatedAt : 0 }
+    : undefined;
+  const rawCatalog = isRecord(value) && isRecord(value.discoveredAgentModels) ? value.discoveredAgentModels : {};
+  const discoveredAgentModels = Object.fromEntries(["codex", "claude", "workbuddy"].flatMap(agent => {
+    const entry = rawCatalog[agent];
+    if (!isRecord(entry) || !Array.isArray(entry.models)) return [];
+    const models = entry.models.filter(isRecord).flatMap(model => typeof model.value === "string" && model.value.trim()
+      ? [{ value: model.value.trim(), label: typeof model.label === "string" && model.label.trim() ? model.label.trim() : model.value.trim() }]
+      : []);
+    return [[agent, { fetchedAt: typeof entry.fetchedAt === "number" ? entry.fetchedAt : 0, models }]];
+  })) as Partial<Record<ChatAgentId, DiscoveredAgentModels>>;
   return {
     ...source,
     version: 6,
@@ -414,6 +511,8 @@ export function migratePersistedData(value: unknown): PersistedData {
     wechatImageCache: isRecord(source.wechatImageCache) ? source.wechatImageCache as Record<string, WeChatImageCacheEntry> : {},
     relayAccountBindings: isRecord(source.relayAccountBindings) ? source.relayAccountBindings as Record<string, RelayAccountBinding> : {},
     ...(writingStyleProfile ? { writingStyleProfile } : {}),
+    ...(topicPositioningProfile ? { topicPositioningProfile } : {}),
+    ...(Object.keys(discoveredAgentModels).length ? { discoveredAgentModels } : {}),
   };
 }
 

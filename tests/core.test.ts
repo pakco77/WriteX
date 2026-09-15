@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -14,8 +14,13 @@ import {
   AGENT_MODELS,
   buildExternalAgentArgs,
   buildExternalAgentNoToolArgs,
+  buildWorkBuddyControlResponse,
+  externalAgentEnvironment,
+  parseWorkBuddyControlEvent,
   parseClaudeNoToolCapabilities,
   parseExternalAgentJson,
+  parseWorkBuddyStreamJson,
+  ChatAgentRuntime,
 } from "../src/chatAgents.ts";
 import {
   buildCodexArgs,
@@ -23,9 +28,11 @@ import {
   buildCodexImageArgs,
   buildCodexImagePrompt,
   buildWritingPrompt,
+  allocateWritingContext,
   findGeneratedImageFile,
   parseCodexJsonLine,
   preserveSelectionWhitespace,
+  CodexRuntime,
 } from "../src/codex.ts";
 import { detectImageMime } from "../src/images.ts";
 import { buildFeedbackInstruction, recordChatFeedback } from "../src/feedback.ts";
@@ -35,7 +42,7 @@ import {
   imageProviderLabel,
   resolveGeneratedProvider,
 } from "../src/imageRouting.ts";
-import { canRegenerateImage, ensureOriginalAssetPairs, type ImageAsset } from "../src/types.ts";
+import { canRegenerateImage, DEFAULT_SETTINGS, ensureOriginalAssetPairs, type ImageAsset } from "../src/types.ts";
 import { buildStyleExtractionPrompt, buildStyleInstruction, renderStyleSkill, sha256Text, styleEnabled } from "../src/writingStyle.ts";
 import { buildBoundedTextDiff } from "../src/selectionDiff.ts";
 import { extractMarkdownImageSources, markdownToPlainText } from "../src/wechat.ts";
@@ -109,8 +116,9 @@ test("topic mutations use the local persistence chain and note renames keep sour
   assert.match(main, /async deleteTopic\(topicId: string\)/);
   assert.match(main, /async openTopicSource\(topicId: string\)/);
   assert.match(main, /moveTopicSourcePaths\(this\.data\.topics, oldPath, newPath\)/);
-  assert.match(main, /const snapshot = structuredClone\(this\.data\.topics\)/);
-  assert.match(main, /this\.data\.topics = snapshot/);
+  assert.match(main, /private readonly topicMutationQueue = new SerializedTopicMutationQueue\(\)/);
+  assert.match(main, /snapshot: \(\) => \(\{ topics: structuredClone\(this\.data\.topics\), profile: structuredClone\(this\.data\.topicPositioningProfile\) \}\)/);
+  assert.match(main, /this\.data\.topics = snapshot\.topics/);
   const topicMethods = main.match(/findTopicByMessage\([sS]*?async createWriteRelayClient/)?.[0] ?? "";
   assert.doesNotMatch(topicMethods, /chatRuntime|createRelayClient|Write Cloud|openWeChatSync|requestUrl/);
 });
@@ -369,12 +377,224 @@ test("external Agent adapters use distinct real CLIs, models, sessions, and read
   const workbuddy = buildExternalAgentArgs("workbuddy", {
     prompt: "梳理大纲",
     model: "default",
+    sessionId: "workbuddy-session",
   });
+  assert.deepEqual(workbuddy.slice(0, 5), ["-p", "--output-format", "stream-json", "--verbose", "--allowedTools"]);
   assert.equal(workbuddy.includes("--model"), false);
+  assert.equal(workbuddy[workbuddy.indexOf("--resume") + 1], "workbuddy-session");
   assert.equal(workbuddy.at(-1), "梳理大纲");
   assert.deepEqual(AGENT_MODELS.codex.map(option => option.value), ["", "gpt-5.6-sol", "gpt-5.6-terra"]);
   assert.deepEqual(AGENT_MODELS.claude.map(option => option.value), ["", "sonnet", "opus"]);
   assert.deepEqual(AGENT_MODELS.workbuddy.map(option => option.value), [""]);
+});
+
+test("external Agent launch preserves GUI PATH first and adds only Node fallbacks", () => {
+  const env = externalAgentEnvironment({ PATH: "/custom/bin:/usr/bin", KEEP: "value" });
+  assert.equal(env.KEEP, "value");
+  assert.equal(env.PATH?.split(":").slice(0, 2).join(":"), "/custom/bin:/usr/bin");
+  assert.equal(env.PATH?.split(":").includes("/usr/local/bin"), true);
+  assert.equal(env.PATH?.split(":").includes("/opt/homebrew/bin"), true);
+});
+
+test("WorkBuddy control events project account state, validate official authorization URLs, and never retain payloads", () => {
+  assert.deepEqual(parseWorkBuddyControlEvent(JSON.stringify({
+    type: "control_response",
+    response: { subtype: "success", request_id: "init", response: { account: { userId: "u", token: "secret" } } },
+  })), { kind: "initialize", requestId: "init", hasUserId: true, hasToken: true });
+  assert.deepEqual(parseWorkBuddyControlEvent(JSON.stringify({
+    type: "control_request",
+    request_id: "url",
+    request: { subtype: "auth_url_callback", authState: { authUrl: "https://login.codebuddy.cn/authorize?token=secret" } },
+  })), { kind: "authorization-url", requestId: "url", url: "https://login.codebuddy.cn/authorize?token=secret" });
+  assert.deepEqual(parseWorkBuddyControlEvent(JSON.stringify({
+    type: "control_request",
+    request_id: "bad-url",
+    request: { subtype: "auth_url_callback", authState: { authUrl: "http://evil.example/authorize" } },
+  })), { kind: "invalid-authorization-url", requestId: "bad-url" });
+  // Official @tencent-ai/agent-sdk auth.js destructures success/userinfo/error from request.request directly.
+  assert.deepEqual(parseWorkBuddyControlEvent(JSON.stringify({
+    type: "control_request",
+    request_id: "auth_result_1",
+    request: { subtype: "auth_result_callback", success: true, userinfo: { userId: "synthetic-user", userName: "test", userNickname: "test", token: "synthetic-token" } },
+  })), { kind: "authorization-result", requestId: "auth_result_1" });
+  assert.deepEqual(parseWorkBuddyControlEvent(JSON.stringify({
+    type: "control_request",
+    request_id: "failed-result",
+    request: { subtype: "auth_result_callback", success: false, error: { type: "auth_failed", message: "synthetic failure" } },
+  })), { kind: "failure" });
+  assert.deepEqual(parseWorkBuddyControlEvent(JSON.stringify({
+    type: "control_response",
+    response: { subtype: "error", request_id: "init", response: {} },
+  })), { kind: "failure" });
+  assert.deepEqual(buildWorkBuddyControlResponse("url", "received"), {
+    type: "control_response",
+    response: { subtype: "success", request_id: "url", response: { received: true } },
+  });
+  assert.deepEqual(buildWorkBuddyControlResponse("result", "handled"), {
+    type: "control_response",
+    response: { subtype: "success", request_id: "result", response: { handled: true } },
+  });
+});
+
+async function withFakeWorkBuddy<T>(mode: "existing" | "authorize" | "idle" | "mismatch", run: (runtime: ChatAgentRuntime, root: string) => Promise<T>): Promise<T> {
+  const root = await mkdtemp(join(tmpdir(), "writex-workbuddy-fake-"));
+  const binary = join(root, `${mode}-codebuddy`);
+  const marker = join(root, "spawned");
+  const script = `#!/usr/bin/env node
+require("node:fs").writeFileSync(${JSON.stringify(marker)}, "1");
+let pending = "";
+const send = value => process.stdout.write(JSON.stringify(value) + "\\n");
+const request = value => value && value.type === "control_request" ? value.request : null;
+process.stdin.on("data", chunk => {
+  pending += chunk;
+  const lines = pending.split(/\\r?\\n/); pending = lines.pop() || "";
+  for (const line of lines) {
+    if (!line) continue;
+    const value = JSON.parse(line); const body = request(value);
+    if (body?.subtype === "initialize") {
+      if ("${mode}" === "existing") {
+        const output = JSON.stringify({type:"control_response",response:{subtype:"success",request_id:"writex-initialize",response:{account:{userId:"u",token:"secret"}}}}) + "\\n";
+        process.stdout.write(output.slice(0, 13)); setTimeout(() => process.stdout.write(output.slice(13)), 3);
+      } else if ("${mode}" === "mismatch") { send({type:"control_response",response:{subtype:"success",request_id:"different",response:{account:{userId:"u",token:"secret"}}}}); setTimeout(() => process.exit(0), 3); }
+      else if ("${mode}" === "authorize") send({type:"control_response",response:{subtype:"success",request_id:"writex-initialize",response:{}}});
+      continue;
+    }
+    if (body?.subtype === "authenticate") {
+      if (body.methodId !== "external" || body.environment !== "internal") process.exit(3);
+      send({type:"control_request",request_id:"url",request:{subtype:"auth_url_callback",authState:{authUrl:"https://login.codebuddy.cn/authorize?token=secret"}}});
+      continue;
+    }
+    if (value.type === "control_response" && value.response?.request_id === "url") {
+      send({type:"control_request",request_id:"result",request:{subtype:"auth_result_callback",success:true,userinfo:{userId:"synthetic-user",userName:"test",userNickname:"test",token:"synthetic-token"}}});
+    }
+  }
+});`;
+  await writeFile(binary, script, "utf8");
+  await chmod(binary, 0o700);
+  const runtime = new ChatAgentRuntime(new CodexRuntime(() => ""), () => ({ ...DEFAULT_SETTINGS, workbuddyPath: binary }));
+  try { return await run(runtime, root); }
+  finally { runtime.stop(); await rm(root, { recursive: true, force: true }); }
+}
+
+test("WorkBuddy connection uses a real isolated stream process for an existing account", async () => {
+  await withFakeWorkBuddy("existing", async runtime => {
+    const result = await runtime.connectWorkBuddy({ onAuthorizationUrl: () => assert.fail("existing account must not authorize") });
+    assert.equal(result.status, "existing-account");
+  });
+});
+
+test("WorkBuddy connection completes the official callback handshake without retaining the URL", async () => {
+  await withFakeWorkBuddy("authorize", async runtime => {
+    let opened = false;
+    const result = await runtime.connectWorkBuddy({ onAuthorizationUrl: url => {
+      opened = new URL(url).hostname === "login.codebuddy.cn";
+    } });
+    assert.equal(result.status, "authorized");
+    assert.equal(opened, true);
+  });
+});
+
+test("WorkBuddy connection cancellation kills an idle control process and rejects mismatched initialization", async () => {
+  await withFakeWorkBuddy("idle", async runtime => {
+    const controller = new AbortController();
+    const pending = runtime.connectWorkBuddy({ signal: controller.signal, onAuthorizationUrl: () => assert.fail("idle process must not authorize") });
+    setTimeout(() => controller.abort(), 15);
+    await assert.rejects(pending, /已取消 WorkBuddy 连接/);
+  });
+  await withFakeWorkBuddy("mismatch", async runtime => {
+    await assert.rejects(runtime.connectWorkBuddy({ onAuthorizationUrl: () => assert.fail("mismatched response must not authorize") }), /连接未完成/);
+  });
+});
+
+test("WorkBuddy aborts before a delayed resolver can spawn a control process", async () => {
+  await withFakeWorkBuddy("existing", async (runtime, root) => {
+    const path = await runtime.workBuddyCliPath();
+    let releaseResolver: (() => void) | undefined;
+    const resolver = new Promise<void>(resolve => { releaseResolver = resolve; });
+    let resolverStarted: (() => void) | undefined;
+    const started = new Promise<void>(resolve => { resolverStarted = resolve; });
+    const privateRuntime = runtime as unknown as { resolveExternalPath(agent: "workbuddy"): Promise<string> };
+    privateRuntime.resolveExternalPath = async () => {
+      resolverStarted?.();
+      await resolver;
+      return path;
+    };
+    const controller = new AbortController();
+    const pending = runtime.connectWorkBuddy({ signal: controller.signal, onAuthorizationUrl: () => assert.fail("aborted resolver must not authorize") });
+    await started;
+    controller.abort();
+    releaseResolver?.();
+    await assert.rejects(pending, /已取消 WorkBuddy 连接/);
+    await assert.rejects(access(join(root, "spawned")));
+  });
+});
+
+test("WorkBuddy cancellation during a delayed authorization opener does not arm an authorization timeout", async () => {
+  await withFakeWorkBuddy("authorize", async runtime => {
+    let releaseOpener: (() => void) | undefined;
+    const opener = new Promise<void>(resolve => { releaseOpener = resolve; });
+    let openerStarted: (() => void) | undefined;
+    const opened = new Promise<void>(resolve => { openerStarted = resolve; });
+    const timerHost = globalThis as unknown as { setTimeout: typeof setTimeout };
+    const originalSetTimeout = timerHost.setTimeout;
+    let authorizationTimeouts = 0;
+    timerHost.setTimeout = ((callback: () => void, milliseconds?: number) => {
+      if (milliseconds === 300_000) authorizationTimeouts += 1;
+      return originalSetTimeout(callback, milliseconds);
+    }) as typeof setTimeout;
+    try {
+      const controller = new AbortController();
+      const pending = runtime.connectWorkBuddy({
+        signal: controller.signal,
+        onAuthorizationUrl: async () => { openerStarted?.(); await opener; },
+      });
+      await opened;
+      controller.abort();
+      releaseOpener?.();
+      await assert.rejects(pending, /已取消 WorkBuddy 连接/);
+      assert.equal(authorizationTimeouts, 0);
+    } finally {
+      timerHost.setTimeout = originalSetTimeout;
+    }
+  });
+});
+
+async function waitForFile(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try { await access(path); return; }
+    catch { await new Promise(resolve => setTimeout(resolve, 10)); }
+  }
+  throw new Error(`Timed out waiting for ${path}`);
+}
+
+function processExists(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch { return false; }
+}
+
+test("WorkBuddy installer cancellation kills an ignored-TERM child process group before returning", async () => {
+  const root = await mkdtemp(join(tmpdir(), "writex-workbuddy-installer-test-"));
+  const script = join(root, "install.sh");
+  const pidFile = join(root, "child.pid");
+  const childSource = 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)';
+  await writeFile(script, `node -e '${childSource}' &\nchild=$!\nprintf '%s' "$child" > ${JSON.stringify(pidFile)}\nwait "$child"\n`, "utf8");
+  await chmod(script, 0o700);
+  const runtime = new ChatAgentRuntime(new CodexRuntime(() => ""), () => ({ ...DEFAULT_SETTINGS }));
+  try {
+    const controller = new AbortController();
+    const pending = runtime.installWorkBuddy(script, controller.signal);
+    await waitForFile(pidFile);
+    const childPid = Number.parseInt((await readFile(pidFile, "utf8")).trim(), 10);
+    assert.equal(processExists(childPid), true);
+    const started = Date.now();
+    controller.abort();
+    await assert.rejects(pending, /已取消 WorkBuddy 安装/);
+    assert.ok(Date.now() - started >= 1_200, "cancellation must wait through the process-group grace period");
+    assert.equal(processExists(childPid), false);
+  } finally {
+    runtime.stop();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("writing-style extraction uses a dedicated no-tool one-shot path for all Agents", () => {
@@ -386,7 +606,7 @@ test("writing-style extraction uses a dedicated no-tool one-shot path for all Ag
   assert.equal(codex[codex.indexOf("--sandbox") + 1], "read-only");
   assert.equal(codex[codex.indexOf("-C") + 1], "/tmp/writex-style-isolated");
   const workbuddy = buildExternalAgentNoToolArgs("workbuddy", { prompt: "只总结已嵌入的文字", model: "default" });
-  assert.deepEqual(workbuddy.slice(0, 8), ["-p", "--output-format", "json", "--tools", "", "--strict-mcp-config", "--no-session-persistence", "--setting-sources"]);
+  assert.deepEqual(workbuddy.slice(0, 9), ["-p", "--output-format", "stream-json", "--verbose", "--tools", "", "--strict-mcp-config", "--no-session-persistence", "--setting-sources"]);
   assert.equal(workbuddy[workbuddy.indexOf("--setting-sources") + 1], "");
   assert.equal(workbuddy.includes("Read"), false);
   const supportedClaude = parseClaudeNoToolCapabilities({ code: 0, stdout: "--tools <value>\n--strict-mcp-config\n--no-session-persistence\n--setting-sources <sources>" });
@@ -446,6 +666,91 @@ test("Claude-like JSON output keeps the real session and rejects empty responses
   );
 });
 
+async function withFakeWorkBuddyTurn<T>(run: (runtime: ChatAgentRuntime, root: string) => Promise<T>): Promise<T> {
+  const root = await mkdtemp(join(tmpdir(), "writex-workbuddy-turn-"));
+  const binary = join(root, "codebuddy");
+  const script = `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const prompt = args.at(-1) || "";
+const format = args[args.indexOf("--output-format") + 1];
+const stream = format === "stream-json" && args.includes("--verbose");
+if (!stream) {
+  // Mirrors CodeBuddy's long JSON response failure: a valid response is cut at 64 KiB.
+  const whole = JSON.stringify({ type: "result", result: "x".repeat(70000), session_id: "cut-session" });
+  process.stdout.write(whole.slice(0, 65536));
+  process.exit(0);
+}
+if (prompt.includes("失败事件")) {
+  process.stdout.write(JSON.stringify({ type: "result", subtype: "error", is_error: true, result: "synthetic WorkBuddy failure", session_id: "failed-session" }) + "\\n");
+  process.exit(0);
+}
+const events = [
+  { type: "system", subtype: "init", session_id: "stream-session", tools: ["Read"] },
+  { type: "file-history-snapshot", session_id: "stream-session", snapshot: {} },
+  { type: "assistant", session_id: "stream-session", message: { role: "assistant", content: [{ type: "thinking", thinking: "分析" }, { type: "text", text: "流式长请求结果" }] } },
+  { type: "result", subtype: "success", is_error: false, result: "流式长请求结果", session_id: "stream-session" },
+];
+const output = (prompt.includes("坏事件") ? "not-json-event\\n" : "") + events.map(JSON.stringify).join("\\n") + "\\n";
+// Exercise process-output chunk boundaries; the runtime must reconstruct complete NDJSON lines.
+process.stdout.write(output.slice(0, 37));
+setTimeout(() => process.stdout.write(output.slice(37, 211)), 2);
+setTimeout(() => { process.stdout.write(output.slice(211)); process.exit(0); }, 4);`;
+  await writeFile(binary, script, "utf8");
+  await chmod(binary, 0o700);
+  const runtime = new ChatAgentRuntime(new CodexRuntime(() => ""), () => ({ ...DEFAULT_SETTINGS, workbuddyPath: binary }));
+  try { return await run(runtime, root); }
+  finally { runtime.stop(); await rm(root, { recursive: true, force: true }); }
+}
+
+test("WorkBuddy normal turns survive a 64 KiB JSON-mode cutover by consuming its real stream-json result", async () => {
+  await withFakeWorkBuddyTurn(async (runtime, root) => {
+    const result = await runtime.runTurn({
+      agent: "workbuddy",
+      cwd: root,
+      prompt: "把这段长上下文整理为可执行提纲",
+    });
+    assert.deepEqual(result, {
+      text: "流式长请求结果",
+      sessionId: "stream-session",
+      threadId: "stream-session",
+      warnings: [],
+    });
+  });
+});
+
+test("WorkBuddy one-shot ignores one malformed stream event when a final result follows", async () => {
+  await withFakeWorkBuddyTurn(async (runtime, root) => {
+    const result = await runtime.runOneShot({
+      agent: "workbuddy",
+      cwd: root,
+      prompt: "坏事件后仍应返回答案",
+    });
+    assert.equal(result.text, "流式长请求结果");
+    assert.equal(result.threadId, "stream-session");
+  });
+});
+
+test("WorkBuddy stream parser uses the final result, retains the session, rejects error results, and accepts legacy JSON", () => {
+  assert.deepEqual(parseWorkBuddyStreamJson([
+    JSON.stringify({ type: "system", subtype: "init", session_id: "stream-session" }),
+    JSON.stringify({ type: "assistant", session_id: "stream-session", message: { role: "assistant", content: [{ type: "text", text: "过程文本" }] } }),
+    JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "最终文本", session_id: "stream-session" }),
+  ].join("\n")), {
+    text: "最终文本",
+    sessionId: "stream-session",
+    threadId: "stream-session",
+    warnings: [],
+  });
+  assert.throws(
+    () => parseWorkBuddyStreamJson(JSON.stringify({ type: "result", is_error: true, result: "可显示的失败原因", session_id: "failed-session" })),
+    /可显示的失败原因/,
+  );
+  assert.equal(parseWorkBuddyStreamJson(JSON.stringify([
+    { type: "message", role: "assistant", content: [{ type: "output_text", text: "旧格式" }] },
+    { type: "result", is_error: false, result: "", session_id: "legacy-session" },
+  ])).text, "旧格式");
+});
+
 test("Codex JSONL parser returns thread and final assistant message", () => {
   assert.deepEqual(
     parseCodexJsonLine('{"type":"thread.started","thread_id":"thread-123"}'),
@@ -454,6 +759,10 @@ test("Codex JSONL parser returns thread and final assistant message", () => {
   assert.deepEqual(
     parseCodexJsonLine('{"type":"item.completed","item":{"type":"agent_message","text":"改写结果"}}'),
     { text: "改写结果" },
+  );
+  assert.deepEqual(
+    parseCodexJsonLine('{"type":"item.completed","item":{"type":"web_search","action":{"type":"search","query":"WriteX"}}}'),
+    { webSearch: true },
   );
   assert.deepEqual(parseCodexJsonLine("not-json"), {});
 });
@@ -474,6 +783,17 @@ test("Codex arguments use an optional model and exact reasoning effort for new a
   assert.equal(resumed[resumedModelIndex + 1], "gpt-5.6-sol");
   assert.ok(resumed.includes('model_reasoning_effort="xhigh"'));
   assert.deepEqual(resumed.slice(-2), ["thread-123", "-"]);
+});
+
+test("Codex native web search is opt-in and leaves browser automation disabled", () => {
+  const off = buildCodexArgs({ cwd: "/vault", allowWebSearch: false });
+  const on = buildCodexArgs({ cwd: "/vault", allowWebSearch: true });
+  assert.equal(off.includes('web_search="disabled"'), true);
+  assert.equal(on.includes('web_search="live"'), true);
+  assert.equal(on.includes("browser_use"), true);
+  const prompt = buildWritingPrompt({ request: "查最新资料", filePath: "a.md", noteContent: "正文", maxContextChars: 100, allowWebSearch: true });
+  assert.match(prompt, /必要时可使用原生联网检索/);
+  assert.doesNotMatch(prompt, /不要访问网络/);
 });
 
 test("Codex receives only explicitly attached local images as native visual input", () => {
@@ -552,10 +872,21 @@ test("writing prompt includes selection and clips long note context", () => {
   });
   assert.match(prompt, /用户选中的原文/);
   assert.match(prompt, /原句/);
-  assert.match(prompt, /A{12}/);
-  assert.match(prompt, /正文已截断/);
+  assert.match(prompt, /A{2}/);
   assert.match(prompt, /匿名结构特征/);
-  assert.doesNotMatch(prompt, /A{13}/);
+  assert.doesNotMatch(prompt, /A{3}/);
+});
+
+test("outline prompts show bounded local related material with its source path", () => {
+  const prompt = buildWritingPrompt({
+    request: "搭大纲",
+    filePath: "当前.md",
+    noteContent: "当前正文",
+    maxContextChars: 100,
+    relatedContext: "相关本地笔记（标题匹配，最多 3 篇）：\n- 来源：相关.md\n  相关材料",
+  });
+  assert.match(prompt, /相关本地笔记（标题匹配，最多 3 篇）/);
+  assert.match(prompt, /来源：相关\.md/);
 });
 
 test("writing prompt exposes only the user-attached local files and permits reading that bounded list", () => {
@@ -642,6 +973,17 @@ test("Plan mode asks Codex for a decision-ready plan instead of a finished draft
   assert.match(prompt, /Plan 模式/);
   assert.match(prompt, /不要直接给成稿/);
   assert.match(prompt, /关键选择/);
+});
+
+test("writing context gives current, selection, history, and related material one total budget", () => {
+  const context = allocateWritingContext({
+    noteContent: "正文".repeat(8), selection: "选段".repeat(5), conversation: "历史".repeat(8), related: "材料".repeat(8), maxChars: 30,
+  });
+  assert.ok(Object.values(context).join("").length <= 30);
+  assert.match(context.selection, /选段/);
+  assert.match(context.noteContent, /正文/);
+  assert.ok(context.conversation.length <= 4);
+  assert.equal(context.related, "");
 });
 
 test("selection replacement preserves surrounding whitespace", () => {

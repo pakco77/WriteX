@@ -1,6 +1,16 @@
 # Changelog
 
-All notable public changes to WriteX are documented here.
+## 0.6.0 - 2026-09-15
+
+- Added a local account-positioning Markdown reference, independent topic-analysis Agent/model preference, explicit five-star analysis with detail and provenance, stale-rating status, rating filters, and user decisions/corrections.
+- Preserved explicit Agent model choices outside a refreshed catalog; Codex reads its local app-server model list and WorkBuddy reads only CLI-advertised model values.
+- Switched WorkBuddy no-tool writing-style extraction to its existing stream-json response path to avoid aggregate JSON output truncation.
+
+## 0.5.9 - 2026-09-05
+
+- Kept WeChat's 20,000-code-point and 1 MiB draft limits, added shared safe inline-CSS compression, accurate final-HTML metering, a previewable compact layout, and a direct rich-copy fallback for oversized drafts or animated GIFs.
+- Added explicit topic-to-article association, confirmed native new-note creation, and reusable article opening without overwriting an existing Chat draft.
+- Made outline flow use current local material plus bounded title-matched related notes, and added an opt-in Codex native web-search setting with actual completed-search disclosure.
 
 ## 0.5.8 - 2026-08-30
 
@@ -8,6 +18,8 @@ All notable public changes to WriteX are documented here.
 - Moved the local topic inbox into a reusable editor-tab page with created-time groups, local search, explicit target-note routing, and no automatic send or draft creation.
 - Replaced direct selection replacement with a local before/after comparison modal and bounded text diff; only an explicit apply invokes the existing guarded editor replacement.
 - Migrated persisted data from schema 5 to 6 without changing existing notes, topics, feedback, attachment, Relay, Cloud, or WeChat-cache records.
+
+All notable public changes to WriteX are documented here.
 
 ## 0.5.7 - 2026-08-18
 

@@ -16,6 +16,18 @@ export function shouldScrollFocusedTopic(topicId: string, focusedTopicId: string
   return Boolean(focusedTopicId) && topicId === focusedTopicId;
 }
 
+export function topicArticleFileName(title: string): string {
+  const safe = title
+    .replace(/[\\/:*?"<>|]/g, "-")
+    .replace(/\.{2,}/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^\.+|\.+$/g, "")
+    .slice(0, 120);
+  return `${safe || "未命名文章"}.md`;
+}
+
 export async function saveQuickTopicInput(input: {
   input: QuickTopicInput;
   currentDraft: () => string;

@@ -126,11 +126,54 @@ const xiaoheiTheme: WriteXThemePackage = {
   mapping: commonMapping,
 };
 
-export const BUILTIN_THEMES: Readonly<Record<"default" | "xiaohei", WriteXThemePackage>> = Object.freeze({
+const compactTheme: WriteXThemePackage = {
+  schemaVersion: 1,
+  manifest: {
+    id: "compact",
+    name: "精简排版（扩容）",
+    version: "1.0.0",
+    author: "WriteX",
+    license: "MIT",
+    sourceUrl: "https://github.com/pakco77/WriteX",
+    description: "保留 Markdown 语义，去除装饰性内联样式以压缩微信草稿 HTML。",
+    minWriteXVersion: "0.5.9",
+  },
+  tokens: {},
+  components: {
+    document: { template: "<section>{{children}}</section>" },
+    paragraph: { template: "<p>{{children}}</p>" },
+    heading1: { template: "<h1>{{children}}</h1>" },
+    heading2: { template: "<h2>{{children}}</h2>" },
+    heading3: { template: "<h3>{{children}}</h3>" },
+    strong: { template: "<strong>{{children}}</strong>" },
+    emphasis: { template: "<em>{{children}}</em>" },
+    delete: { template: "<span style=\"text-decoration:line-through\">{{children}}</span>" },
+    blockquote: { template: "<blockquote>{{children}}</blockquote>" },
+    unorderedList: { template: "<ul>{{children}}</ul>" },
+    orderedList: { template: "<ol>{{children}}</ol>" },
+    listItem: { template: "<li>{{children}}</li>" },
+    link: { template: '<a href="{{src}}">{{children}}</a>' },
+    image: { template: '<img src="{{src}}" alt="{{alt}}">' },
+    imageCaption: { template: "<p>{{caption}}</p>" },
+    inlineCode: { template: "<code>{{content}}</code>" },
+    codeBlock: { template: "<pre><code>{{content}}</code></pre>" },
+    horizontalRule: { template: "<hr>" },
+    table: { template: "<table>{{children}}</table>" },
+    tableHead: { template: "<thead>{{children}}</thead>" },
+    tableBody: { template: "<tbody>{{children}}</tbody>" },
+    tableRow: { template: "<tr>{{children}}</tr>" },
+    tableHeaderCell: { template: "<th>{{children}}</th>" },
+    tableCell: { template: "<td>{{children}}</td>" },
+  },
+  mapping: commonMapping,
+};
+
+export const BUILTIN_THEMES: Readonly<Record<string, WriteXThemePackage>> = Object.freeze({
   default: defaultTheme,
   xiaohei: xiaoheiTheme,
+  compact: compactTheme,
 });
 
 export function getBuiltinTheme(id: string): WriteXThemePackage | undefined {
-  return id === "default" || id === "xiaohei" ? BUILTIN_THEMES[id] : undefined;
+  return BUILTIN_THEMES[id];
 }

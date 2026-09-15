@@ -29,6 +29,12 @@ test("v0.1 settings migrate without losing existing values", () => {
   assert.equal(migrateSettings(legacy).workbuddyPath, "");
 });
 
+test("native web search remains disabled for migrated settings", () => {
+  assert.equal(DEFAULT_SETTINGS.codexWebSearchEnabled, false);
+  assert.equal(migrateSettings({}).codexWebSearchEnabled, false);
+  assert.equal(migrateSettings({ codexWebSearchEnabled: true }).codexWebSearchEnabled, true);
+});
+
 test("persisted settings expose only relay configuration state, never the key", () => {
   const settings: AgentSettings = migrateSettings({
     relayUrl: "https://relay.example.com",
@@ -71,15 +77,35 @@ test("Cloud lifecycle UI distinguishes local disconnect from server-side revocat
   assert.match(main, /进行中的同步或待人工核查结果/);
 });
 
-test("invalid persisted Agent and removed Luna model fall back visibly to Codex default", () => {
+test("invalid persisted Agent falls back while an explicit future model survives catalog refresh", () => {
   const settings = migrateSettings({
     activeChatAgent: "unknown" as AgentSettings["activeChatAgent"],
     codexModel: "gpt-5.6-luna",
     codexReasoningEffort: "impossible" as AgentSettings["codexReasoningEffort"],
   });
   assert.equal(settings.activeChatAgent, "codex");
-  assert.equal(settings.codexModel, "");
+  assert.equal(settings.codexModel, "gpt-5.6-luna");
   assert.equal(settings.codexReasoningEffort, "");
+});
+
+test("topic analysis model uses the selected Agent's dynamic catalog without changing Chat preferences", async () => {
+  const main = await readFile(new URL("../src/main.ts", import.meta.url), "utf8");
+  const setting = main.match(/setName\("选题分析 Agent"\)[\s\S]*?new Setting\(aiSettings\)\n      \.setName\("模型列表"\)/)?.[0] ?? "";
+  assert.match(setting, /this\.refreshTopicAnalysisModelOptions\(\)/);
+  assert.match(setting, /\.addDropdown\(dropdown => \{/);
+  assert.match(setting, /this\.plugin\.agentSettings\.topicAnalysisModel = value/);
+  assert.doesNotMatch(setting, /\.addText\(text => text\s*\n\s*\.setPlaceholder\("默认模型/);
+  assert.doesNotMatch(setting, /topicAnalysisModel = this\.plugin\.agentSettings\.(?:codexModel|claudeModel|workbuddyModel)/);
+});
+
+test("a successful model refresh rebuilds only the open analysis-model dropdown", async () => {
+  const main = await readFile(new URL("../src/main.ts", import.meta.url), "utf8");
+  const setting = main.match(/setName\("选题分析 Agent"\)[\s\S]*?new Setting\(aiSettings\)\n      \.setName\("模型列表"\)/)?.[0] ?? "";
+  assert.match(setting, /this\.topicAnalysisModelSelect = dropdown\.selectEl/);
+  assert.match(main, /await this\.persist\(\);\s*this\.agentSettingTab\?\.refreshTopicAnalysisModelOptions\(\);/);
+  assert.match(main, /refreshTopicAnalysisModelOptions\(\): void \{[\s\S]*?agentModelOptions\(this\.plugin\.agentSettings\.topicAnalysisAgent, this\.plugin\.data\.discoveredAgentModels, this\.plugin\.agentSettings\.topicAnalysisModel\)/);
+  const refresh = main.match(/refreshTopicAnalysisModelOptions\(\): void \{[\s\S]*?\n  \}/)?.[0] ?? "";
+  assert.doesNotMatch(refresh, /this\.display\(\)/);
 });
 
 test("v1 data migrates to v6 without losing Chat, assets, sessions, skills, feedback, Relay, or legacy render evidence", () => {
@@ -183,6 +209,24 @@ test("v6 migration rejects an invalid optional style and normalizes a confirmed 
     writingStyleProfile: { markdown: "保留判断。", sources: [{ kind: "note", filePath: "a.md", sourceHash: "x", capturedAt: 1, characterCount: 5, includedChars: 5 }], revision: 2, agent: "claude", model: "sonnet", createdAt: 1, updatedAt: 2 },
   }).writingStyleProfile;
   assert.deepEqual(profile, { markdown: "保留判断。", sources: [{ kind: "note", filePath: "a.md", sourceHash: "x", capturedAt: 1, characterCount: 5, includedChars: 5 }], revision: 2, agent: "claude", model: "sonnet", createdAt: 1, updatedAt: 2 });
+});
+
+test("v6 migration keeps old topic fields while dropping malformed rating and decision records", () => {
+  const legacy = {
+    id: "topic", title: "保留的选题", content: "保留的材料", sourceKind: "manual" as const,
+    createdAt: 1, updatedAt: 2, customOldField: "keep",
+    rating: { stars: 99, detail: "坏星级", agent: "codex", model: "m", profileHash: "h", analyzedAt: 3 },
+    ratingStale: true,
+    decision: { value: "invented", reason: "坏决定", updatedAt: 4 },
+  };
+  const valid = {
+    id: "valid", title: "有效", content: "材料", sourceKind: "manual" as const, createdAt: 1, updatedAt: 2,
+    rating: { stars: 4, detail: "有依据", suggestion: "补案例", agent: "claude", model: "sonnet", profileHash: "hash", analyzedAt: 3 },
+    decision: { value: "adopt", reason: "已有经验", correction: "四星即可", updatedAt: 4 },
+  };
+  const migrated = migratePersistedData({ version: 6, settings: DEFAULT_SETTINGS, notes: {}, topics: [legacy, valid] });
+  assert.deepEqual(migrated.topics[0], { id: "topic", title: "保留的选题", content: "保留的材料", sourceKind: "manual", createdAt: 1, updatedAt: 2, customOldField: "keep" });
+  assert.deepEqual(migrated.topics[1], valid);
 });
 
 test("v4 manual topics remain explicit without fabricated Chat identity", () => {

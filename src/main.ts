@@ -1,5 +1,6 @@
 import {
   App,
+  type ButtonComponent,
   FileSystemAdapter,
   MarkdownView,
   Notice,
@@ -13,10 +14,14 @@ import {
 } from "obsidian";
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { link, mkdir, open, readFile, rm, stat } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { CodexImageUnavailableError, CodexRuntime } from "./codex";
 import { ChatAgentRuntime } from "./chatAgents";
+import { agentModelOptions, mergeDiscoveredModels } from "./modelCatalog";
+import { buildTopicAnalysisPrompt, parseTopicRating, setTopicDecision } from "./topicStrategy";
+import { SerializedTopicMutationQueue, acceptsTopicAnalysisResult, topicDecisionVersion, type TopicAnalysisSnapshot } from "./topicMutation";
 import { archiveActiveConversation, restoreArchivedConversation } from "./conversations";
 import { buildMarkdownBlockInsertion } from "./chatBlocks";
 import { CHAT_ATTACHMENT_MAX_BYTES, validateChatAttachmentInputs } from "./chatAttachments";
@@ -35,6 +40,8 @@ import { ThemeStore } from "./themeStore";
 import { buildThemeCompilePrompt, type ThemeCompileSource } from "./themeCompiler";
 import { AgentView, VIEW_TYPE, WRITEX_ICON } from "./view";
 import { TopicLibraryView, TOPIC_LIBRARY_VIEW_TYPE } from "./topicLibraryView";
+import { topicArticleFileName } from "./topicLibraryController";
+import { CreatedTopicArticleUnlinkedError, createOrAssociateTopicArticle } from "./topicArticleCreation";
 import { WRITING_STYLE_SKILL_PATH, buildStyleExtractionPrompt, renderStyleSkill, sha256Text } from "./writingStyle";
 import { allocateWritingStyleSources, exportStyleSkillTransaction, persistWritingStyleProfile, replaceCapturedRange, routeTopicToChat, withIsolatedStyleExtractionCwd } from "./writingStyleController";
 import { cleanAssistantMarkdown as normalizeAssistantMarkdown, computeSelectionReplacement as computeFinalSelectionReplacement } from "./selectionReplacement";
@@ -46,6 +53,7 @@ import {
   moveTopicSourcePaths,
   renameTopicRecord,
   saveMessageAsTopic,
+  setTopicArticlePath,
 } from "./topics";
 import {
   DEFAULT_SETTINGS,
@@ -78,6 +86,8 @@ const RELAY_KEY_ID = "write-wechat-relay-key";
 const CLOUD_TOKEN_ID = "writex-cloud-access-token";
 const CLOUD_INSTALLATION_TOKEN_ID = "writex-cloud-installation-token";
 const MAX_IMAGE_BYTES = 100 * 1024 * 1024;
+const WORKBUDDY_INSTALLER_URL = "https://copilot.tencent.com/cli/install.sh";
+const WORKBUDDY_QUICKSTART_URL = "https://www.codebuddy.cn/docs/cli/quickstart";
 
 interface StoreImageMetadata {
   source: ImageAsset["source"];
@@ -110,6 +120,16 @@ export default class ObsidianAgentPlugin extends Plugin {
   private imageCapability: ImageCapability = "unknown";
   private persistChain: Promise<void> = Promise.resolve();
   private referencedImageSyncChain: Promise<void> = Promise.resolve();
+  private readonly topicArticleCreatePending = new Set<string>();
+  private readonly topicArticleUnlinkedPaths = new Map<string, string>();
+  private readonly topicMutationQueue = new SerializedTopicMutationQueue();
+  private readonly topicAnalysisRequests = new Map<string, { token: string; controller: AbortController }>();
+  private agentSettingTab: AgentSettingTab | null = null;
+  private modelRefreshStatus: Record<import("./types").ChatAgentId, { state: "idle" | "refreshing" | "updated" | "cached" | "failed"; error?: string }> = {
+    codex: { state: "idle" },
+    claude: { state: "idle" },
+    workbuddy: { state: "idle" },
+  };
   private skillIndex!: VaultSkillIndex;
   // ponytail: session verification preserves zero-request repeat copies; recheck after changing the Relay's account in place.
   private verifiedRelayUrls = new Set<string>();
@@ -164,7 +184,14 @@ export default class ObsidianAgentPlugin extends Plugin {
     }));
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
       if (!(file instanceof TFile) || file.extension !== "md") return;
-      void this.rebindNotePath(oldPath, file.path);
+      void this.rebindNotePath(oldPath, file.path).catch(error => console.error("WriteX failed to rebind a renamed note", error));
+      void this.rebindTopicPositioningProfile(oldPath, file.path).catch(error => console.error("WriteX failed to update a renamed positioning file", error));
+    }));
+    this.registerEvent(this.app.vault.on("modify", file => {
+      if (file instanceof TFile && file.extension === "md") void this.markTopicRatingsStaleForPositioningFile(file.path).catch(error => console.error("WriteX failed to update positioning freshness", error));
+    }));
+    this.registerEvent(this.app.vault.on("delete", file => {
+      if (file instanceof TFile && file.extension === "md") void this.clearTopicPositioningProfileForDeletedFile(file.path).catch(error => console.error("WriteX failed to clear a deleted positioning file", error));
     }));
     const syncSelection = (event: Event): void => {
       const target = event.target;
@@ -175,10 +202,39 @@ export default class ObsidianAgentPlugin extends Plugin {
     this.registerDomEvent(document, "keyup", event => {
       if (event.shiftKey) syncSelection(event);
     });
-    this.addSettingTab(new AgentSettingTab(this.app, this));
+    this.agentSettingTab = new AgentSettingTab(this.app, this);
+    this.addSettingTab(this.agentSettingTab);
+    void this.refreshDiscoveredModels().catch(() => undefined);
+  }
+
+  async refreshDiscoveredModels(): Promise<void> {
+    const previous = structuredClone(this.data.discoveredAgentModels ?? {});
+    for (const agent of ["codex", "workbuddy", "claude"] as const) this.modelRefreshStatus[agent] = { state: "refreshing" };
+    this.agentSettingTab?.renderModelRefreshStatus();
+    const [codex, workbuddy, claude] = await Promise.allSettled([this.runtime.listModels(), this.chatRuntime.listWorkBuddyModels(), this.chatRuntime.listClaudeModels()]);
+    let next = previous;
+    if (codex.status === "fulfilled") next = mergeDiscoveredModels(next, "codex", codex.value, Date.now());
+    if (workbuddy.status === "fulfilled") next = mergeDiscoveredModels(next, "workbuddy", workbuddy.value.map(model => ({ model })), Date.now());
+    if (claude.status === "fulfilled") next = mergeDiscoveredModels(next, "claude", claude.value.map(item => ({ model: item.model, displayName: item.displayName })), Date.now());
+    this.modelRefreshStatus.codex = codex.status === "fulfilled" ? { state: "updated" } : { state: previous.codex ? "cached" : "failed", error: errorMessage(codex.reason) };
+    this.modelRefreshStatus.workbuddy = workbuddy.status === "fulfilled" ? { state: "updated" } : { state: previous.workbuddy ? "cached" : "failed", error: errorMessage(workbuddy.reason) };
+    this.modelRefreshStatus.claude = claude.status === "fulfilled" ? { state: "updated" } : { state: previous.claude ? "cached" : "failed", error: errorMessage(claude.reason) };
+    this.agentSettingTab?.renderModelRefreshStatus();
+    if (codex.status === "rejected" && workbuddy.status === "rejected" && claude.status === "rejected") throw new Error("无法刷新本机模型列表；已保留上次成功列表。");
+    this.data.discoveredAgentModels = next;
+    await this.persist();
+    this.agentSettingTab?.refreshTopicAnalysisModelOptions();
+    this.agentSettingTab?.renderModelRefreshStatus();
+  }
+
+  getModelRefreshStatus(): Record<import("./types").ChatAgentId, { state: "idle" | "refreshing" | "updated" | "cached" | "failed"; error?: string }> {
+    return this.modelRefreshStatus;
   }
 
   override onunload(): void {
+    this.agentSettingTab?.cancelWorkBuddyConnection();
+    for (const { controller } of this.topicAnalysisRequests.values()) controller.abort();
+    this.topicAnalysisRequests.clear();
     this.chatRuntime.stop();
   }
 
@@ -217,22 +273,87 @@ export default class ObsidianAgentPlugin extends Plugin {
     return view;
   }
 
+  private refreshTopicLibraryViews(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(TOPIC_LIBRARY_VIEW_TYPE)) {
+      if (leaf.view instanceof TopicLibraryView) leaf.view.refresh();
+    }
+  }
+
   async continueTopicToChat(topicId: string, targetPath: string): Promise<boolean> {
     const topic = this.findTopicById(topicId);
     const target = this.app.vault.getAbstractFileByPath(targetPath);
     if (!topic) throw new Error("这条选题已经不存在。");
     if (!(target instanceof TFile) || target.extension !== "md") throw new Error("“继续到”笔记已移动或删除，请重新选择。");
-    const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
-    if (existing instanceof AgentView && existing.hasComposerDraft()) return false;
     return routeTopicToChat({
-      hasDraft: () => existing instanceof AgentView && existing.hasComposerDraft(),
+      hasDraft: () => {
+        const current = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+        return current instanceof AgentView && current.hasComposerDraft();
+      },
       openTarget: async () => {
-        const targetLeaf = this.app.workspace.getLeaf("tab");
-        await targetLeaf.openFile(target);
+        const openLeaf = this.app.workspace.getLeavesOfType("markdown").find(leaf => (
+          leaf.view instanceof MarkdownView && leaf.view.file?.path === target.path
+        ));
+        if (openLeaf) this.app.workspace.revealLeaf(openLeaf);
+        else await this.app.workspace.getLeaf("tab").openFile(target);
       },
       activateChat: async () => this.activateView().then(view => view ? { prepare: () => view.prepareTopicDraft(topic) } : null),
     });
   }
+
+  async associateTopicArticle(topicId: string, articlePath: string): Promise<void> {
+    const article = this.app.vault.getAbstractFileByPath(articlePath);
+    if (!(article instanceof TFile) || article.extension !== "md") throw new Error("选择的文章已移动或删除，请重新选择。");
+    await this.persistTopicMutation(() => setTopicArticlePath(this.data.topics, topicId, article.path));
+    this.topicArticleUnlinkedPaths.delete(topicId);
+  }
+
+  getTopicArticleTargetPath(topicId: string): string {
+    const topic = this.findTopicById(topicId);
+    if (!topic) throw new Error("这条选题已经不存在。");
+    const pendingPath = this.topicArticleUnlinkedPaths.get(topicId);
+    if (pendingPath && this.app.vault.getAbstractFileByPath(pendingPath) instanceof TFile) return pendingPath;
+    const source = topic.sourceNotePath && this.app.vault.getAbstractFileByPath(topic.sourceNotePath) instanceof TFile
+      ? topic.sourceNotePath
+      : this.app.workspace.getActiveFile()?.path ?? "";
+    const fileName = topicArticleFileName(topic.title);
+    const folder = this.app.fileManager.getNewFileParent(source, fileName);
+    const prefix = folder.path ? `${folder.path}/` : "";
+    const base = fileName.replace(/\.md$/i, "");
+    let path = normalizePath(`${prefix}${fileName}`);
+    for (let suffix = 2; this.app.vault.getAbstractFileByPath(path); suffix += 1) path = normalizePath(`${prefix}${base} ${suffix}.md`);
+    return path;
+  }
+
+  async createTopicArticle(topicId: string, confirmedPath?: string): Promise<TFile> {
+    const topic = this.findTopicById(topicId);
+    if (!topic) throw new Error("这条选题已经不存在。");
+    const linked = topic.articleNotePath ? this.app.vault.getAbstractFileByPath(topic.articleNotePath) : null;
+    if (linked instanceof TFile && linked.extension === "md") return linked;
+    if (this.topicArticleCreatePending.has(topicId)) throw new Error("这条选题正在创建文章，请勿重复点击。");
+    this.topicArticleCreatePending.add(topicId);
+    try {
+      const path = this.getTopicArticleTargetPath(topicId);
+      if (confirmedPath && confirmedPath !== path) throw new Error("目标路径已被占用或新建笔记位置已变化，请重新确认后再创建。");
+      const file = await createOrAssociateTopicArticle<TFile>({
+        linkedPath: linked instanceof TFile ? linked.path : undefined,
+        pendingPath: this.topicArticleUnlinkedPaths.get(topicId),
+        fileAtPath: candidate => {
+          const value = this.app.vault.getAbstractFileByPath(candidate);
+          return value instanceof TFile && value.extension === "md" ? value : null;
+        },
+        nextPath: () => path,
+        create: candidate => this.app.vault.create(candidate, ""),
+        pathOf: candidate => candidate.path,
+        associate: candidate => this.persistTopicMutation(() => setTopicArticlePath(this.data.topics, topicId, candidate.path)).then(() => undefined),
+      });
+      this.topicArticleUnlinkedPaths.delete(topicId);
+      return file;
+    } catch (error) {
+      if (error instanceof CreatedTopicArticleUnlinkedError) this.topicArticleUnlinkedPaths.set(topicId, error.filePath);
+      throw error;
+    } finally { this.topicArticleCreatePending.delete(topicId); }
+  }
+
 
   async setWritingStyleEnabled(notePath: string, enabled: boolean): Promise<void> {
     const state = this.getNoteState(notePath);
@@ -378,6 +499,60 @@ export default class ObsidianAgentPlugin extends Plugin {
     app.setting?.openTabById(this.manifest.id);
   }
 
+  async connectWorkBuddy(signal?: AbortSignal, installIfMissing = false): Promise<"existing-account" | "authorized"> {
+    try {
+      await this.chatRuntime.workBuddyCliPath();
+    } catch (error) {
+      if (this.agentSettings.workbuddyPath.trim() || !installIfMissing) throw error;
+      await this.installWorkBuddyCli(signal);
+      await this.chatRuntime.workBuddyCliPath();
+    }
+    const result = await this.chatRuntime.connectWorkBuddy({
+      signal,
+      onAuthorizationUrl: async url => {
+        const electron = require("electron") as { shell: { openExternal(url: string): Promise<void> } };
+        await electron.shell.openExternal(url);
+      },
+    });
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      if (leaf.view instanceof AgentView) void leaf.view.refreshAgentConnectionStatus();
+    }
+    if (result.status === "not-connected") throw new Error("WorkBuddy 尚未连接账号，请重试。");
+    return result.status;
+  }
+
+  async openWorkBuddyInstallInstructions(): Promise<void> {
+    const electron = require("electron") as { shell: { openExternal(url: string): Promise<void> } };
+    await electron.shell.openExternal(WORKBUDDY_QUICKSTART_URL);
+  }
+
+  private async installWorkBuddyCli(signal?: AbortSignal): Promise<void> {
+    if (process.platform !== "darwin") {
+      throw new Error("当前系统请按 WorkBuddy 官方安装说明安装 CLI 后，再点击连接。");
+    }
+    if (signal?.aborted) throw new Error("已取消 WorkBuddy 安装。");
+    let timer = 0;
+    try {
+      const response = await Promise.race([
+        requestUrl({ url: WORKBUDDY_INSTALLER_URL, method: "GET", throw: false }),
+        new Promise<never>((_, reject) => { timer = window.setTimeout(() => reject(new Error("下载 WorkBuddy 官方安装器超时，请重试。")), 30_000); }),
+      ]);
+      if (signal?.aborted) throw new Error("已取消 WorkBuddy 安装。");
+      if (response.status < 200 || response.status >= 300 || new TextEncoder().encode(response.text).byteLength > 1024 * 1024) {
+        throw new Error("无法获取 WorkBuddy 官方安装器，请重试或使用官方安装说明。");
+      }
+      const directory = await mkdtemp(join(tmpdir(), "writex-workbuddy-installer-"));
+      const scriptPath = join(directory, "install.sh");
+      try {
+        await writeFile(scriptPath, response.text, { encoding: "utf8", mode: 0o700 });
+        await chmod(scriptPath, 0o700);
+        await this.chatRuntime.installWorkBuddy(scriptPath, signal);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    } finally { window.clearTimeout(timer); }
+  }
+
   openWeChatSync(filePath: string, themeId: string): void {
     showWeChatSync(this, filePath, themeId);
   }
@@ -427,16 +602,17 @@ export default class ObsidianAgentPlugin extends Plugin {
     return this.data.topics.find(topic => topic.id === topicId);
   }
 
-  private async persistTopicMutation<T>(mutate: () => T): Promise<T> {
-    const snapshot = structuredClone(this.data.topics);
-    try {
-      const result = mutate();
-      await this.persist();
-      return result;
-    } catch (error) {
-      this.data.topics = snapshot;
-      throw error;
-    }
+  private persistTopicMutation<T>(mutate: () => T | Promise<T>): Promise<T> {
+    return this.topicMutationQueue.run({
+      snapshot: () => ({ topics: structuredClone(this.data.topics), profile: structuredClone(this.data.topicPositioningProfile) }),
+      mutate,
+      persist: () => this.persist(),
+      restore: snapshot => {
+        this.data.topics = snapshot.topics;
+        if (snapshot.profile) this.data.topicPositioningProfile = snapshot.profile;
+        else delete this.data.topicPositioningProfile;
+      },
+    });
   }
 
   async saveTopicFromMessage(notePath: string, messageId: string): Promise<TopicIdea> {
@@ -462,7 +638,155 @@ export default class ObsidianAgentPlugin extends Plugin {
   }
 
   async renameTopic(topicId: string, title: string): Promise<void> {
-    await this.persistTopicMutation(() => renameTopicRecord(this.data.topics, topicId, title));
+    await this.persistTopicMutation(() => {
+      const topic = renameTopicRecord(this.data.topics, topicId, title);
+      if (topic.rating) topic.ratingStale = true;
+    });
+  }
+
+  async setTopicPositioningProfile(path: string, markdown: string): Promise<void> {
+    if (!path.trim() || !markdown.trim()) throw new Error("请选择一份非空的账号定位 Markdown。");
+    const profilePath = path.trim();
+    const contentHash = sha256Text(markdown);
+    const changed = await this.persistTopicMutation(() => {
+      const previous = this.data.topicPositioningProfile;
+      if (previous?.path === profilePath && previous.contentHash === contentHash) return false;
+      this.data.topicPositioningProfile = { path: profilePath, contentHash, updatedAt: Date.now() };
+      this.markTopicRatingsStale();
+      return true;
+    });
+    if (changed) {
+      this.cancelTopicAnalysisRequests();
+      this.refreshTopicLibraryViews();
+    }
+  }
+
+  async markTopicRatingsStaleForPositioningFile(path: string): Promise<void> {
+    if (this.data.topicPositioningProfile?.path !== path) return;
+    const file = await this.readTopicPositioningFile(path);
+    if (!file) return;
+    const changed = await this.persistTopicMutation(() => {
+      const profile = this.data.topicPositioningProfile;
+      if (!profile || profile.path !== path || profile.contentHash === file.contentHash) return false;
+      profile.contentHash = file.contentHash;
+      profile.updatedAt = Date.now();
+      this.markTopicRatingsStale();
+      return true;
+    });
+    if (changed) {
+      this.cancelTopicAnalysisRequests();
+      this.refreshTopicLibraryViews();
+    }
+  }
+
+  private async rebindTopicPositioningProfile(oldPath: string, newPath: string): Promise<void> {
+    if (this.data.topicPositioningProfile?.path !== oldPath) return;
+    const changed = await this.persistTopicMutation(() => {
+      const profile = this.data.topicPositioningProfile;
+      if (!profile || profile.path !== oldPath) return false;
+      profile.path = newPath;
+      profile.updatedAt = Date.now();
+      this.markTopicRatingsStale();
+      return true;
+    });
+    if (changed) {
+      this.cancelTopicAnalysisRequests();
+      this.refreshTopicLibraryViews();
+    }
+  }
+
+  private async clearTopicPositioningProfileForDeletedFile(path: string): Promise<void> {
+    if (this.data.topicPositioningProfile?.path !== path) return;
+    const changed = await this.persistTopicMutation(() => {
+      if (this.data.topicPositioningProfile?.path !== path) return false;
+      delete this.data.topicPositioningProfile;
+      this.markTopicRatingsStale();
+      return true;
+    });
+    if (changed) {
+      this.cancelTopicAnalysisRequests();
+      this.refreshTopicLibraryViews();
+    }
+  }
+
+  private markTopicRatingsStale(): void {
+    for (const topic of this.data.topics) if (topic.rating) topic.ratingStale = true;
+  }
+
+  private cancelTopicAnalysisRequests(): void {
+    for (const { controller } of this.topicAnalysisRequests.values()) controller.abort();
+    this.topicAnalysisRequests.clear();
+  }
+
+  private async readTopicPositioningFile(path: string): Promise<{ path: string; contentHash: string } | undefined> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile) || file.extension !== "md" || file.path !== path) return undefined;
+    return { path: file.path, contentHash: sha256Text(await this.app.vault.read(file)) };
+  }
+
+  async setTopicDecision(topicId: string, value: import("./types").TopicDecisionValue, reason = "", correction = ""): Promise<void> {
+    await this.persistTopicMutation(() => {
+      const topic = this.findTopicById(topicId);
+      if (!topic) throw new Error("这条选题已经不存在。");
+      Object.assign(topic, setTopicDecision(topic, value, reason, correction, Date.now()));
+    });
+  }
+
+  async clearTopicDecision(topicId: string): Promise<void> {
+    await this.persistTopicMutation(() => {
+      const topic = this.findTopicById(topicId);
+      if (!topic) throw new Error("这条选题已经不存在。");
+      delete topic.decision;
+      topic.updatedAt = Date.now();
+    });
+  }
+
+  async analyzeTopic(topicId: string, positioningMarkdown: string): Promise<void> {
+    const topic = this.findTopicById(topicId);
+    let profile = this.data.topicPositioningProfile;
+    if (!topic) throw new Error("这条选题已经不存在。");
+    if (!profile) throw new Error("请先选择并保存账号定位 Markdown。");
+    const positioningHash = sha256Text(positioningMarkdown);
+    if (profile.contentHash !== positioningHash) {
+      const changed = await this.persistTopicMutation(() => {
+        const currentProfile = this.data.topicPositioningProfile;
+        if (!currentProfile || currentProfile.path !== profile!.path) throw new Error("账号定位已变化，请重新开始分析。");
+        if (currentProfile.contentHash === positioningHash) return false;
+        currentProfile.contentHash = positioningHash;
+        currentProfile.updatedAt = Date.now();
+        this.markTopicRatingsStale();
+        return true;
+      });
+      if (changed) {
+        this.cancelTopicAnalysisRequests();
+        this.refreshTopicLibraryViews();
+      }
+      profile = this.data.topicPositioningProfile;
+    }
+    if (!profile || profile.contentHash !== positioningHash) throw new Error("账号定位已变化，请重新开始分析。");
+    if (positioningMarkdown.length > this.data.settings.maxContextChars || topic.content.length > this.data.settings.maxContextChars) throw new Error("账号定位或选题材料超过当前上下文上限；请先精简后再分析。");
+    const previousRequest = this.topicAnalysisRequests.get(topicId);
+    previousRequest?.controller.abort();
+    const controller = new AbortController();
+    const decisions = this.data.topics.map(({ title, decision }) => ({ title, decision: decision && { ...decision } }));
+    const snapshot: TopicAnalysisSnapshot = { topicId, title: topic.title, content: topic.content, profilePath: profile.path, profileHash: profile.contentHash, decisionVersion: topicDecisionVersion(decisions), token: randomUUID() };
+    this.topicAnalysisRequests.set(topicId, { token: snapshot.token, controller });
+    const agent = this.agentSettings.topicAnalysisAgent;
+    const model = this.agentSettings.topicAnalysisModel;
+    try {
+      const result = await withIsolatedStyleExtractionCwd(cwd => this.chatRuntime.runNoToolOneShot({ agent, cwd, model, signal: controller.signal, prompt: buildTopicAnalysisPrompt({ topic: snapshot, positioningMarkdown, profileHash: snapshot.profileHash, maxChars: this.data.settings.maxContextChars, decisions }) }));
+      const rating = parseTopicRating(result.text, { agent, model: model || "默认", profileHash: snapshot.profileHash, analyzedAt: Date.now() });
+      await this.persistTopicMutation(async () => {
+        const current = this.findTopicById(topicId);
+        const currentProfile = this.data.topicPositioningProfile;
+        const file = await this.readTopicPositioningFile(snapshot.profilePath);
+        if (!current || !acceptsTopicAnalysisResult({ snapshot, requestToken: this.topicAnalysisRequests.get(topicId)?.token, topic: current, profile: currentProfile, file, decisionVersion: topicDecisionVersion(this.data.topics) })) throw new Error("选题、账号定位或用户决定已变化，未覆盖为旧分析结果。");
+        current.rating = rating;
+        delete current.ratingStale;
+      });
+    } finally {
+      if (this.topicAnalysisRequests.get(topicId)?.token === snapshot.token) this.topicAnalysisRequests.delete(topicId);
+    }
   }
 
   async deleteTopic(topicId: string): Promise<void> {
@@ -1123,6 +1447,11 @@ class AgentSettingTab extends PluginSettingTab {
   private pendingCloudAccountName = "";
   private pendingCloudAppid = "";
   private pendingCloudAppsecret = "";
+  private workBuddyController: AbortController | null = null;
+  private workBuddyDisplayGeneration = 0;
+  private modelRefreshStatusEl: HTMLElement | null = null;
+  private modelRefreshButton: ButtonComponent | null = null;
+  private topicAnalysisModelSelect: HTMLSelectElement | null = null;
 
   constructor(app: App, private readonly plugin: ObsidianAgentPlugin) {
     super(app, plugin);
@@ -1134,7 +1463,50 @@ class AgentSettingTab extends PluginSettingTab {
     return group.createDiv({ cls: "oa-settings-group-content" });
   }
 
+  cancelWorkBuddyConnection(): void {
+    this.workBuddyController?.abort();
+  }
+
+  renderModelRefreshStatus(): void {
+    if (!this.modelRefreshStatusEl) return;
+    const labels: Record<import("./types").ChatAgentId, string> = { codex: "Codex", claude: "Claude", workbuddy: "WorkBuddy" };
+    const status = this.plugin.getModelRefreshStatus();
+    const text = (agent: import("./types").ChatAgentId): string => {
+      const current = status[agent];
+      if (current.state === "refreshing") return `${labels[agent]}：刷新中…`;
+      if (current.state === "updated") return `${labels[agent]}：已更新`;
+      if (current.state === "cached") return `${labels[agent]}：刷新失败，继续使用缓存`;
+      if (current.state === "failed") return `${labels[agent]}：刷新失败，暂无可用列表`;
+      return `${labels[agent]}：尚未刷新`;
+    };
+    this.modelRefreshStatusEl.setText(["模型列表状态：", ...(["codex", "claude", "workbuddy"] as const).map(text)].join("\n"));
+    const refreshing = (["codex", "claude", "workbuddy"] as const).some(agent => status[agent].state === "refreshing");
+    this.modelRefreshButton?.setDisabled(refreshing).setButtonText(refreshing ? "刷新中…" : "刷新模型列表");
+  }
+
+  refreshTopicAnalysisModelOptions(): void {
+    const select = this.topicAnalysisModelSelect;
+    if (!select?.isConnected) return;
+    select.replaceChildren();
+    for (const option of agentModelOptions(this.plugin.agentSettings.topicAnalysisAgent, this.plugin.data.discoveredAgentModels, this.plugin.agentSettings.topicAnalysisModel)) {
+      const element = document.createElement("option");
+      element.value = option.value;
+      element.text = option.label;
+      select.append(element);
+    }
+    select.value = this.plugin.agentSettings.topicAnalysisModel;
+  }
+
+  override hide(): void {
+    this.workBuddyDisplayGeneration += 1;
+    this.cancelWorkBuddyConnection();
+    super.hide();
+  }
+
   override display(): void {
+    this.workBuddyDisplayGeneration += 1;
+    this.cancelWorkBuddyConnection();
+    const displayGeneration = this.workBuddyDisplayGeneration;
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("p", {
@@ -1155,7 +1527,7 @@ class AgentSettingTab extends PluginSettingTab {
       .addButton(button => button.setButtonText("检测").onClick(async () => {
         button.setDisabled(true).setButtonText("检测中…");
         try {
-          new Notice(`Codex 已连接：${await this.plugin.chatRuntime.check("codex")}`);
+          new Notice(`Codex CLI 已检测：${await this.plugin.chatRuntime.check("codex")}`);
         } catch (error) {
           new Notice(errorMessage(error));
         } finally {
@@ -1175,33 +1547,146 @@ class AgentSettingTab extends PluginSettingTab {
       .addButton(button => button.setButtonText("检测").onClick(async () => {
         button.setDisabled(true).setButtonText("检测中…");
         try {
-          new Notice(`Claude 已连接：${await this.plugin.chatRuntime.check("claude")}`);
+          new Notice(`Claude CLI 已检测：${await this.plugin.chatRuntime.check("claude")}`);
         } catch (error) {
           new Notice(errorMessage(error));
         } finally {
           button.setDisabled(false).setButtonText("检测");
         }
       }));
+    const workBuddyStatus = aiSettings.createEl("p", {
+      cls: "setting-item-description",
+      text: "连接检查不会发送写作请求或消耗模型额度；不会读取 WorkBuddy 桌面 App 的私有登录信息。",
+    });
+    let installRequired = false;
+    let showInstallInstructions = false;
+    let refreshWorkBuddyAction: (() => void) | null = null;
     new Setting(aiSettings)
-      .setName("WorkBuddy CLI 可执行文件")
-      .setDesc("WriteX 通过腾讯官方 codebuddy/cbc CLI 连接 WorkBuddy，不会读取 WorkBuddy 桌面 App 的私有登录信息。首次使用请在终端运行 npm install -g @tencent-ai/codebuddy-code，再运行 codebuddy 完成登录，回到这里点击检测。")
+      .setName("连接 WorkBuddy")
+      .setDesc("已有账号会直接复用；未登录时才打开腾讯官方授权页（中国站）。没有 CLI 时会显示“安装并连接”；已发现的 CLI 不会自动升级。")
+      .addButton(button => {
+        let detection = 0;
+        refreshWorkBuddyAction = () => {
+          const current = ++detection;
+          installRequired = false;
+          showInstallInstructions = false;
+          button.setDisabled(true).setButtonText("检查 WorkBuddy…");
+          void this.plugin.chatRuntime.workBuddyCliPath().then(() => {
+            if (displayGeneration !== this.workBuddyDisplayGeneration || current !== detection) return;
+            button.setDisabled(false).setButtonText("连接 WorkBuddy");
+          }).catch(() => {
+            if (displayGeneration !== this.workBuddyDisplayGeneration || current !== detection) return;
+            if (this.plugin.agentSettings.workbuddyPath.trim()) {
+              button.setDisabled(false).setButtonText("连接 WorkBuddy");
+              workBuddyStatus.setText("填写的 WorkBuddy CLI 路径不可执行。请修正或清空该路径；清空后才可选择安装。");
+              return;
+            }
+            if (process.platform !== "darwin") {
+              showInstallInstructions = true;
+              button.setDisabled(false).setButtonText("查看官方安装说明");
+              workBuddyStatus.setText("当前系统请先按 WorkBuddy 官方说明安装 CLI，再回来连接。");
+              return;
+            }
+            installRequired = true;
+            button.setDisabled(false).setButtonText("安装并连接");
+            workBuddyStatus.setText("未发现 WorkBuddy CLI。点击“安装并连接”才会下载并执行官方 macOS 安装器。");
+          });
+        };
+        refreshWorkBuddyAction();
+        return button.setButtonText("检查 WorkBuddy…").setDisabled(true).setCta().onClick(async () => {
+          if (showInstallInstructions) {
+            button.setDisabled(true).setButtonText("正在打开…");
+            try {
+              await this.plugin.openWorkBuddyInstallInstructions();
+              workBuddyStatus.setText("已打开 WorkBuddy 官方安装说明。安装完成后重新打开此设置页即可连接。");
+            } catch {
+              workBuddyStatus.setText("无法打开 WorkBuddy 官方安装说明，请稍后重试。");
+            } finally {
+              if (displayGeneration === this.workBuddyDisplayGeneration) button.setDisabled(false).setButtonText("查看官方安装说明");
+            }
+            return;
+          }
+          if (this.workBuddyController) {
+            this.workBuddyController.abort();
+            button.setDisabled(true).setButtonText("正在取消…");
+            workBuddyStatus.setText("正在取消 WorkBuddy 连接…");
+            return;
+          }
+          const controller = new AbortController();
+          this.workBuddyController = controller;
+          button.setButtonText("取消连接");
+          workBuddyStatus.setText(installRequired
+            ? "正在下载并执行 WorkBuddy 官方 macOS 安装器…"
+            : "正在检查 WorkBuddy；如未登录，将打开腾讯官方授权页（中国站）…");
+          try {
+            const status = await this.plugin.connectWorkBuddy(controller.signal, installRequired);
+            installRequired = false;
+            workBuddyStatus.setText(status === "existing-account"
+              ? "已连接已有 WorkBuddy 账号。账号有效期、服务可用性和额度将在实际对话时由 WorkBuddy 确认。"
+              : "WorkBuddy 授权已完成。账号有效期、服务可用性和额度将在实际对话时由 WorkBuddy 确认。");
+            new Notice("WorkBuddy 已连接。");
+          } catch (error) {
+            if (!controller.signal.aborted) {
+              workBuddyStatus.setText("WorkBuddy 连接未完成，可重试。");
+              new Notice(errorMessage(error));
+            }
+          } finally {
+            if (this.workBuddyController === controller) this.workBuddyController = null;
+            if (displayGeneration === this.workBuddyDisplayGeneration) {
+              if (controller.signal.aborted) workBuddyStatus.setText("已取消 WorkBuddy 连接，可重试。");
+              button.setDisabled(false).setButtonText(installRequired ? "安装并连接" : "连接 WorkBuddy");
+            }
+          }
+        });
+      });
+    new Setting(aiSettings)
+      .setName("WorkBuddy CLI 路径（可选）")
+      .setDesc("留空时自动发现 codebuddy/cbc。填写后只使用该路径；路径无效时不会静默切换到其他安装。")
       .addText(text => text
         .setPlaceholder("未连接")
         .setValue(this.plugin.agentSettings.workbuddyPath)
         .onChange(async value => {
           this.plugin.agentSettings.workbuddyPath = value.trim();
           await this.plugin.persist();
-        }))
-      .addButton(button => button.setButtonText("检测").onClick(async () => {
-        button.setDisabled(true).setButtonText("检测中…");
-        try {
-          new Notice(`WorkBuddy 已连接：${await this.plugin.chatRuntime.check("workbuddy")}`);
-        } catch (error) {
-          new Notice(errorMessage(error));
-        } finally {
-          button.setDisabled(false).setButtonText("检测");
-        }
-      }));
+          refreshWorkBuddyAction?.();
+        }));
+    new Setting(aiSettings)
+      .setName("选题分析 Agent")
+      .setDesc("独立于 Chat 的选择；模型列表会在启动后从本机 Agent 刷新，当前选择不会被覆盖。")
+      .addDropdown(dropdown => {
+        (["codex", "claude", "workbuddy"] as const).forEach(agent => dropdown.addOption(agent, agent === "workbuddy" ? "WorkBuddy" : agent === "codex" ? "Codex" : "Claude"));
+        return dropdown.setValue(this.plugin.agentSettings.topicAnalysisAgent).onChange(async value => {
+          this.plugin.agentSettings.topicAnalysisAgent = value as AgentSettings["topicAnalysisAgent"];
+          await this.plugin.persist(); this.display();
+        });
+      })
+      .addDropdown(dropdown => {
+        this.topicAnalysisModelSelect = dropdown.selectEl;
+        this.refreshTopicAnalysisModelOptions();
+        return dropdown.setValue(this.plugin.agentSettings.topicAnalysisModel).onChange(async value => {
+          this.plugin.agentSettings.topicAnalysisModel = value;
+          await this.plugin.persist();
+        });
+      });
+    new Setting(aiSettings)
+      .setName("模型列表")
+      .setDesc("自动刷新会保留你的主动选择；刷新失败时继续使用最近成功的缓存列表。")
+      .addButton(button => {
+        this.modelRefreshButton = button;
+        return button.setButtonText("刷新模型列表").onClick(async () => {
+          button.setDisabled(true).setButtonText("刷新中…");
+          try {
+            await this.plugin.refreshDiscoveredModels();
+            new Notice("模型列表已刷新。各提供方状态见下方。 ");
+          } catch (error) {
+            new Notice(errorMessage(error));
+          } finally {
+            this.renderModelRefreshStatus();
+          }
+        });
+      });
+    this.modelRefreshStatusEl = aiSettings.createEl("p", { cls: "setting-item-description" });
+    this.renderModelRefreshStatus();
     new Setting(aiSettings)
       .setName("发送给 Agent 的正文上限")
       .setDesc("超出部分会截断，避免长文请求无限增长。")
@@ -1213,6 +1698,13 @@ class AgentSettingTab extends PluginSettingTab {
           this.plugin.agentSettings.maxContextChars = Math.min(100000, Math.max(2000, parsed));
           await this.plugin.persist();
         }));
+    new Setting(aiSettings)
+      .setName("允许 Codex 联网检索")
+      .setDesc("默认关闭。开启后仅 Codex Chat 可使用已验证的原生联网检索；Claude 与 WorkBuddy 保持禁网，不会静默切换 Agent。设置开启不代表本轮已检索。")
+      .addToggle(toggle => toggle.setValue(this.plugin.agentSettings.codexWebSearchEnabled).onChange(async value => {
+        this.plugin.agentSettings.codexWebSearchEnabled = value;
+        await this.plugin.persist();
+      }));
     new Setting(aiSettings)
       .setName("OpenAI 图片 API Key")
       .setDesc(this.plugin.agentSettings.hasImageApiKey ? "已保存。仅在你点击“使用我的 OpenAI API”时调用。" : "可选备用路径；不会从 Agent 静默切换过来。")

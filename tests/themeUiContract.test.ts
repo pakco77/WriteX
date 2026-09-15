@@ -106,6 +106,8 @@ test("note rename, editor image sync, and image-size selection stay connected to
 
   assert.match(main, /vault\.on\("rename"/);
   assert.match(view, /vault\.on\("rename"/);
+  const renameHandler = view.match(/vault\.on\("rename"[\s\S]*?this\.render\(\);\n      void this\.refreshSkills\(\);/)?.[0] ?? "";
+  assert.match(renameHandler, /this\.noteComposerStates\.rename\(oldPath, file\.path\);[\s\S]*if \(!renamedCurrentNote\) return;/);
   assert.match(view, /getActiveFile\(\)[\s\S]*当前 Markdown 笔记已经移动或删除/);
   assert.match(main, /syncReferencedImages/);
   assert.match(view, /editor-change[\s\S]*scheduleReferencedImageSync/);
@@ -117,7 +119,7 @@ test("note rename, editor image sync, and image-size selection stay connected to
   assert.match(styles, /\.oa-image-size-select/);
 });
 
-test("Chat prepends the outline guide to the existing draft without auto-sending", async () => {
+test("Chat starts an outline from real local material without auto-sending", async () => {
   const [view, styles] = await Promise.all([
     readFile(new URL("../src/view.ts", import.meta.url), "utf8"),
     readFile(new URL("../styles.css", import.meta.url), "utf8"),
@@ -132,24 +134,27 @@ test("Chat prepends the outline guide to the existing draft without auto-sending
   assert.match(view, /第1段（起）[\s\S]*钩子层[\s\S]*具体的画面或时刻[\s\S]*大多数人看到的「症状」/);
   assert.match(view, /## 文章定位[\s\S]*## 大纲骨架[\s\S]*## 情绪曲线设计[\s\S]*## 逻辑曲线设计[\s\S]*## 表达理论标签[\s\S]*## 写作建议/);
   assert.match(view, /不直接给答案[\s\S]*强制收敛[\s\S]*结构先行[\s\S]*情绪可视化[\s\S]*可回包/);
-  assert.match(view, /首次激活时只发开场问题[\s\S]*不要直接产出大纲[\s\S]*一次只聚焦当前步骤/);
-  assert.match(view, /若本条用户消息在本说明之后附有非空草稿或主题[\s\S]*把它当作 Step 1 的用户回答[\s\S]*直接做选题扫描[\s\S]*不重复首次开场/);
-  assert.match(view, /只有没有附带内容时才使用指定首次开场白/);
-  assert.match(view, /当前笔记、选区、Chat 历史或系统提供的上下文都只是参考上下文[\s\S]*不算「本条用户消息在本说明之后附有的非空草稿\/主题」/);
-  assert.match(view, /只有 OUTLINE_PROMPT 指令正文结束后[\s\S]*同一个用户要求末尾明确出现额外的新草稿\/主题文本[\s\S]*才视作 Step 1 回答/);
-  assert.match(view, /否则即使当前笔记已有正文，也必须使用首次开场/);
+  assert.match(view, /优先使用当前选区、当前笔记和当前对话里的真实材料/);
+  assert.match(view, /材料不足或关键方向冲突时，才问 1–3 个必要问题/);
+  assert.match(view, /材料充分时可以直接产出可写大纲/);
+  assert.match(view, /材料不足时先输出必要问题，再在最后另起一行输出 \$\{OUTLINE_NEEDS_INPUT_MARKER\}/);
+  assert.match(view, /from "\.\/outlineResult"/);
+  assert.match(view, /parseOutlineResult\(result\.text\)/);
+  assert.match(view, /completedOutline && this\.outlineSession && this\.controller === controller/);
+  assert.match(view, /outlineSession && !turnSucceeded && this\.controller === controller/);
+  assert.match(view, /private stopRun\(\): void \{\s*this\.outlineSession = false;/);
   assert.match(view, /不要编造用户经历、数据或论据/);
   assert.match(view, /aria-label": "大纲：通过五步问答搭建文章骨架"/);
   assert.match(view, /title: "通过五步问答搭建文章骨架"/);
   assert.match(view, /setIcon\(outlineIcon, "list-tree"\)/);
   assert.match(view, /outline\.createSpan\(\{ text: "大纲" \}\)/);
-  assert.match(view, /aria-label": "找切口：随机准备 3 个观察方向"/);
-  assert.match(view, /setIcon\(cutIcon, "scan-search"\)/);
-  assert.match(view, /buildCutPrompt\(sampleCutLenses\(\)\)/);
+  assert.doesNotMatch(view, /aria-label": "找切口：随机准备 3 个观察方向"/);
+  assert.match(view, /outlineResult/);
+  assert.match(view, /outlineSession/);
   assert.match(view, /private prepareComposerDraft/);
   assert.match(view, /private startOutline\(\): void/);
   assert.match(view, /this\.prepareComposerDraft\(OUTLINE_PROMPT, \{ plan: true, prefix: true \}\)/);
-  assert.match(view, /this\.prepareComposerDraft\(buildCutPrompt\(sampleCutLenses\(\)\), \{ plan: true, prefix: true \}\)/);
+  assert.doesNotMatch(view, /buildCutPrompt|sampleCutLenses/);
   assert.match(view, /if \(!options\.prefix && current && current !== target\)/);
   assert.match(view, /options\.prefix && current \? `\$\{target\}\\n\\n\$\{current\}` : target/);
   const shortcutMarkup = view.match(/const shortcuts = form\.createDiv\([\s\S]*?if \(this\.imageMode\)/)?.[0] ?? "";
@@ -356,6 +361,10 @@ test("an explicitly selected Skill blocks unresolved text or image turns and rea
   assert.ok(guardIndex >= 0);
   assert.ok(guardIndex < send.indexOf("state.messages.push"));
   assert.ok(guardIndex < send.indexOf("this.plugin.persist()"));
+  assert.match(send, /const requestComposerState = \{[\s\S]*attachments: queuedAttachments/);
+  assert.match(send, /await this\.plugin\.persist\(\);\s*const clearedRequestComposer = consumeCommittedComposerRequest\(\{/);
+  assert.match(send, /request: requestComposerState[\s\S]*active: \{[\s\S]*notePath: this\.notePath/);
+  assert.match(send, /if \(clearedRequestComposer\) \{/);
   assert.ok(guardIndex < send.indexOf("this.plugin.chatRuntime.runTurn"));
   const pendingImage = send.match(/this\.pendingImageRequest = \{[\s\S]*?\n\s*\};/)?.[0] ?? "";
   assert.match(pendingImage, /activeSkill \? buildExplicitSkillInstruction\(activeSkill\) : ""/);
@@ -410,7 +419,11 @@ test("Topic Library is a standalone local card page and never auto-sends", async
   assert.match(topicPage, /shouldSaveQuickTopicOnKey\(event\.key, event\.isComposing\)/);
   assert.match(topicPage, /搜索标题或来源/);
   assert.match(topicPage, /groupTopicsByCreatedAt/);
-  assert.match(topicPage, /送入 WriteX Chat/);
+  assert.match(topicPage, /继续写作[\s\S]*新建文章/);
+  assert.match(topicPage, /关联已有文章/);
+  assert.match(topicPage, /window\.confirm/);
+  assert.match(topicPage, /getTopicArticleTargetPath/);
+  assert.match(topicPage, /将创建：\$\{targetPath\}/);
   assert.match(topicPage, /continueTopicToChat/);
   assert.match(topicPage, /打开来源/);
   assert.match(topicPage, /改标题/);
@@ -424,6 +437,10 @@ test("Topic Library is a standalone local card page and never auto-sends", async
   assert.doesNotMatch(view, /type ActiveTab = "chat" \| "gallery" \| "preview" \| "topics"/);
   assert.match(main, /registerView\(TOPIC_LIBRARY_VIEW_TYPE/);
   assert.match(main, /open-topic-library/);
+  assert.match(main, /markTopicRatingsStaleForPositioningFile[\s\S]*?this\.refreshTopicLibraryViews\(\)/);
+  assert.match(main, /private refreshTopicLibraryViews\(\): void/);
+  assert.match(topicPage, /refresh\(\): void \{ this\.render\(\); \}/);
+  assert.match(main, /getLeavesOfType\("markdown"\)[\s\S]*MarkdownView[\s\S]*file\?\.path === target\.path/);
   assert.match(styles, /\.oa-topic-card-grid/);
   assert.match(styles, /\.oa-topic-quick-input/);
   assert.doesNotMatch(styles, /\.oa-topic-filter\.is-active/);
@@ -492,15 +509,15 @@ test("WriteX branding changes user-facing copy but preserves compatibility ident
   ]);
   const metadata = JSON.parse(manifest);
   const lock = JSON.parse(packageLock);
-  assert.deepEqual([metadata.id, metadata.name, metadata.version], ["writex", "WriteX", "0.5.8"]);
+  assert.deepEqual([metadata.id, metadata.name, metadata.version], ["writex", "WriteX", "0.6.0"]);
   assert.equal(metadata.minAppVersion, "1.11.4");
-  assert.equal(JSON.parse(versions)["0.5.8"], "1.11.4");
+  assert.equal(JSON.parse(versions)["0.6.0"], "1.11.4");
   assert.equal(JSON.parse(pkg).name, "writex");
-  assert.equal(JSON.parse(pkg).version, "0.5.8");
+  assert.equal(JSON.parse(pkg).version, "0.6.0");
   assert.equal(lock.name, "writex");
-  assert.equal(lock.version, "0.5.8");
+  assert.equal(lock.version, "0.6.0");
   assert.equal(lock.packages[""].name, "writex");
-  assert.equal(lock.packages[""].version, "0.5.8");
+  assert.equal(lock.packages[""].version, "0.6.0");
   assert.match(view, /aria-label": "WriteX"/);
   const brand = view.match(/const brand = header\.createDiv[\s\S]*?const actions =/)?.[0] ?? "";
   assert.match(brand, /createSpan\(\{ text: "Write" \}\)/);
@@ -577,4 +594,18 @@ test("the final confirmation is rendered at the top of its sync step", async () 
     "this.renderCover(container)",
     "this.renderComments(container)",
   ]) assert.ok(confirmation < render.indexOf(detail), `最后确认应位于 ${detail} 之前`);
+});
+
+test("sync distinguishes visible text from final HTML limits and gives animated GIFs a copy route", async () => {
+  const sync = await readFile(new URL("../src/sync.ts", import.meta.url), "utf8");
+  assert.match(sync, /measureWeChatContent/);
+  assert.match(sync, /可见正文/);
+  assert.match(sync, /排版 HTML/);
+  assert.match(sync, /formatBytes\(metrics\.htmlBytes\)/);
+  assert.match(sync, /转为复制微信格式/);
+  assert.match(sync, /精简排版并预览/);
+  assert.match(sync, /previewCompactLayout\(this\.notePath\)/);
+  assert.match(sync, /openCopyPlanForNote\(this\.notePath\)/);
+  const view = await readFile(new URL("../src/view.ts", import.meta.url), "utf8");
+  assert.match(view, /async openCopyPlanForNote\(notePath: string\)/);
 });

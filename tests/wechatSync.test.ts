@@ -5,6 +5,8 @@ import {
   assetPlaceholder,
   buildConfirmationSummary,
   characterCount,
+  measureWeChatContent,
+  visibleHtmlText,
   computeContentHash,
   planContentImage,
   preflightDraft,
@@ -29,7 +31,7 @@ test("draft metadata uses deterministic frontmatter, H1, and filename fallbacks"
     fileName: "文件名",
     defaultAuthor: " 默认作者 ",
   }), {
-    title: "Frontmatter 标题",
+    title: "文件名",
     author: "默认作者",
     digest: "说明",
     commentsEnabled: true,
@@ -44,7 +46,7 @@ test("draft metadata uses deterministic frontmatter, H1, and filename fallbacks"
     markdown: "## 章节\n\n# 第一个 H1\n\n# 第二个 H1",
     fileName: "文件名",
     defaultAuthor: "",
-  }).title, "第一个 H1");
+  }).title, "文件名");
 
   assert.equal(resolveDraftMetadata({
     frontmatter: {},
@@ -52,6 +54,24 @@ test("draft metadata uses deterministic frontmatter, H1, and filename fallbacks"
     fileName: "文件名.md",
     defaultAuthor: "",
   }).title, "文件名");
+});
+
+test("content limits measure visible body separately and use Unicode code points for Relay parity", () => {
+  const metrics = measureWeChatContent("<p>👨‍👩‍👧‍👦正文</p>", "👨‍👩‍👧‍👦正文");
+  assert.equal(metrics.htmlCharacters, Array.from("<p>👨‍👩‍👧‍👦正文</p>").length);
+  assert.equal(metrics.visibleBodyCharacters, characterCount("👨‍👩‍👧‍👦正文"));
+  assert.equal(metrics.htmlBytes, utf8Bytes("<p>👨‍👩‍👧‍👦正文</p>"));
+});
+
+test("visible HTML text excludes URLs and image attributes while retaining rendered entities and code", () => {
+  const visible = visibleHtmlText('<p><a href="https://example.test/a-very-long-url">短链接</a> &amp; <strong>粗体</strong></p><img src="image.png" alt="图片说明"><pre><code>&lt;x&gt;</code></pre>');
+  assert.equal(visible, "短链接 & 粗体<x>");
+  const metrics = measureWeChatContent('<p><a href="https://example.test/a-very-long-url">短链接</a></p><img src="image.png" alt="图片说明">');
+  assert.equal(metrics.visibleBodyCharacters, characterCount("短链接"));
+});
+
+test("visible HTML parsing respects quoted greater-than attributes and common named entities", () => {
+  assert.equal(visibleHtmlText('<p data-label="a > b">甲&mdash;乙</p><span title=\'c > d\'>丙</span>'), "甲—乙丙");
 });
 
 test("draft metadata prefers explicit author and digest fields", () => {

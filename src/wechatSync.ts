@@ -73,7 +73,7 @@ export function resolveDraftMetadata(input: DraftMetadataInput): DraftMetadata {
   const accountId = text(fm["write-wechat-account-id"]);
   const previousTitle = text(fm["write-wechat-synced-title"]);
   return {
-    title: text(fm.title) || firstH1(input.markdown) || input.fileName.replace(/\.md$/i, "").trim(),
+    title: input.fileName.replace(/\.md$/i, "").trim() || text(fm.title) || firstH1(input.markdown),
     author: text(fm.author) || input.defaultAuthor.trim(),
     digest: text(fm.digest) || text(fm.description),
     commentsEnabled: true,
@@ -100,6 +100,49 @@ export function resolveCoverPath(selectedPath: string, frontmatterPath: string, 
 const GRAPHEME_SEGMENTER = new Intl.Segmenter("zh", { granularity: "grapheme" });
 export const characterCount = (value: string): number => [...GRAPHEME_SEGMENTER.segment(value)].length;
 export const utf8Bytes = (value: string): number => Buffer.byteLength(value, "utf8");
+function decodeHtmlEntity(entity: string): string {
+  const named: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", mdash: "—", ndash: "–", hellip: "…", copy: "©", reg: "®" };
+  if (entity in named) return named[entity];
+  const radix = entity.startsWith("#x") || entity.startsWith("#X") ? 16 : 10;
+  const raw = entity.startsWith("#") ? entity.slice(radix === 16 ? 2 : 1) : "";
+  if (!raw || !/^[0-9a-f]+$/i.test(raw)) return `&${entity};`;
+  try { return String.fromCodePoint(Number.parseInt(raw, radix)); } catch { return `&${entity};`; }
+}
+
+/** The rendered HTML is the delivered body, so count its visible text rather than raw Markdown syntax. */
+export function visibleHtmlText(html: string): string {
+  let text = "";
+  let index = 0;
+  let ignoredTag = "";
+  while (index < html.length) {
+    if (html.startsWith("<!--", index)) {
+      const end = html.indexOf("-->", index + 4);
+      index = end < 0 ? html.length : end + 3;
+      continue;
+    }
+    if (html[index] !== "<") { if (!ignoredTag) text += html[index]; index += 1; continue; }
+    let cursor = index + 1;
+    let quote = "";
+    for (; cursor < html.length; cursor += 1) {
+      const character = html[cursor];
+      if (quote) { if (character === quote) quote = ""; continue; }
+      if (character === '"' || character === "'") { quote = character; continue; }
+      if (character === ">") break;
+    }
+    if (cursor >= html.length) { if (!ignoredTag) text += html.slice(index); break; }
+    const tag = html.slice(index + 1, cursor).trim();
+    const match = tag.match(/^\/?\s*([a-z0-9-]+)/i);
+    const name = match?.[1]?.toLowerCase() ?? "";
+    if (/^\//.test(tag) && name === ignoredTag) ignoredTag = "";
+    else if (!/^\//.test(tag) && (name === "script" || name === "style")) ignoredTag = name;
+    index = cursor + 1;
+  }
+  return text.replace(/&(#(?:x[0-9a-f]+|\d+)|[a-z][a-z0-9]+);/gi, (_match, entity: string) => decodeHtmlEntity(entity));
+}
+
+export function measureWeChatContent(html: string, visibleBody = visibleHtmlText(html)): { visibleBodyCharacters: number; htmlCharacters: number; htmlBytes: number } {
+  return { visibleBodyCharacters: characterCount(visibleBody), htmlCharacters: Array.from(html).length, htmlBytes: utf8Bytes(html) };
+}
 export const MAX_TITLE_GRAPHEMES = 60;
 export const MAX_CONTENT_IMAGE_BYTES = 1024 * 1024;
 export const MAX_COVER_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -266,8 +309,9 @@ export function preflightDraft(input: PreflightInput): PreflightIssue[] {
   else if (input.metadata.title) handled("title_valid", `标题：${titleCharacters}/60。`);
   if (characterCount(input.metadata.author) > 16) block("author_too_long", "作者不能超过 16 个字。");
   if (characterCount(input.metadata.digest) > 120) block("digest_too_long", "摘要不能超过 120 个字。");
-  if (characterCount(input.html) >= 20000 || utf8Bytes(input.html) >= 1024 * 1024) {
-    block("content_too_long", "渲染后的正文必须少于 2 万字符且小于 1 MB。");
+  const content = measureWeChatContent(input.html);
+  if (content.htmlCharacters >= 20000 || content.htmlBytes >= 1024 * 1024) {
+    block("content_too_long", `可见正文 ${content.visibleBodyCharacters} 字；排版 HTML ${content.htmlCharacters}/20000 字符，${content.htmlBytes}/1048576 bytes。请精简排版或走复制路径。`);
   }
   if (!input.cover) warn("placeholder_cover_pending", "未选择封面，将使用 900×383 纯白占位封面。");
   for (const asset of input.contentAssets ?? []) {

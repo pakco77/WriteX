@@ -2,9 +2,8 @@ import {
   ASSET_PLACEHOLDER_PREFIX,
   assetIdempotencyKey,
   assetPlaceholder,
-  characterCount,
+  measureWeChatContent,
   resolveDraftIdForTitle,
-  utf8Bytes,
   type DraftMetadata,
 } from "./wechatSync.ts";
 import type {
@@ -71,8 +70,9 @@ export type SyncResult =
 export type SuccessWriter = (value: SyncSuccessState) => void | Promise<void>;
 
 export function assertWeChatContentLimits(html: string): void {
-  if (characterCount(html) >= 20000 || utf8Bytes(html) >= 1024 * 1024) {
-    throw new Error("渲染后的正文必须少于 2 万字符且小于 1 MB。");
+  const metrics = measureWeChatContent(html);
+  if (metrics.htmlCharacters >= 20000 || metrics.htmlBytes >= 1024 * 1024) {
+    throw new Error(`排版 HTML ${metrics.htmlCharacters}/20000 字符，${metrics.htmlBytes}/1048576 bytes，超过微信草稿 2 万字符/1 MB 限制。`);
   }
 }
 
