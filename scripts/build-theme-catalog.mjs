@@ -10,7 +10,7 @@ const { values } = parseArgs({
     "theme-root": { type: "string", default: resolve(scriptDir, "../../writex-theme-packs/themes") },
     output: { type: "string", default: resolve(scriptDir, "../src/themeCatalog.generated.ts") },
     repo: { type: "string", default: "pakco77/writex-theme-packs" },
-    tag: { type: "string", default: "v0.4.0-themes.1" },
+    tag: { type: "string", default: "v0.6.1-themes.1" },
   },
 });
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.1 - 2026-09-16
+
+- Updated all bundled public themes to their capacity-safe packages. For the representative 3,561-character, 108-paragraph, 12-image article, every theme now stays below the WeChat draft 20,000-code-point and 1 MiB limits.
+- Pinned the theme catalog to immutable `v0.6.1-themes.1` Release assets, including each package's version, byte length, and SHA-256.
+
 ## 0.6.0 - 2026-09-15
 
 - Added a local account-positioning Markdown reference, independent topic-analysis Agent/model preference, explicit five-star analysis with detail and provenance, stale-rating status, rating filters, and user decisions/corrections.
