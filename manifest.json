@@ -1,7 +1,7 @@
 {
   "id": "writex",
   "name": "WriteX",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "minAppVersion": "1.11.4",
   "description": "AI 增强原创写作：调用本地 Agent（Codex/Claude/WorkBuddy）完成记录、创作、排版与草稿同步。",
   "author": "Pakco",

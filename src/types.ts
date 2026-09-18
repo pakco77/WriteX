@@ -313,6 +313,7 @@ export interface PersistedData {
   writingStyleProfile?: WritingStyleProfile;
   topicPositioningProfile?: TopicPositioningProfile;
   discoveredAgentModels?: Partial<Record<ChatAgentId, DiscoveredAgentModels>>;
+  themePalettes?: Record<string, string>;
 }
 
 export interface WeChatImageCacheEntry {

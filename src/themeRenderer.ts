@@ -114,7 +114,7 @@ export function compressThemeHtml(html: string): string {
 function component(
   context: RenderContext,
   kind: ThemeNodeKind,
-  values: Partial<Record<"content" | "children" | "summary" | "index" | "language" | "src" | "alt" | "caption", string>>,
+  values: Partial<Record<"content" | "children" | "summary" | "index" | "language" | "src" | "alt" | "caption" | "title", string>>,
 ): string {
   const componentName = context.theme.mapping[kind];
   if (!componentName) {
@@ -135,10 +135,23 @@ function component(
     );
   }
   return definition.template.replace(/{{([^{}]+)}}/g, (_match, rawName: string) => {
-    const name = rawName.trim() as keyof typeof values;
-    const value = values[name] ?? "";
+    const name = rawName.trim();
+    if (name.startsWith("tokens.")) {
+      // 色值来自主题包本身，与模板同信任级，原样注入。
+      return context.theme.tokens[name.slice(7)] ?? "";
+    }
+    const value = values[name as keyof typeof values] ?? "";
     return name === "children" || name === "summary" ? value : escapeScalar(value);
   });
+}
+
+/** 按色板 id 解析 tokens：色板覆盖的键生效，其余沿用主题默认。id 无效时返回原主题。 */
+export function resolveThemePalette(theme: WriteXThemePackage, paletteId?: string): WriteXThemePackage {
+  const palette = paletteId
+    ? theme.palettes?.find(candidate => candidate.id === paletteId)
+    : undefined;
+  if (!palette) return theme;
+  return { ...theme, tokens: { ...theme.tokens, ...palette.tokens } };
 }
 
 function renderInline(nodes: InlineNode[], context: RenderContext): string {
@@ -194,6 +207,20 @@ function renderBlocks(nodes: ThemeMarkdownNode[], context: RenderContext): strin
         return component(context, "paragraph", { children: renderInline(node.inline, context) });
       case "blockquote":
         return component(context, "blockquote", { children: renderBlocks(node.children, context) });
+      case "calloutNote":
+      case "calloutTip":
+      case "calloutWarning": {
+        const title = node.title;
+        const html = component(context, node.kind, {
+          title,
+          children: renderBlocks(node.children, context),
+        });
+        // 无标题时移除标题占位段（calloutTemplate 生成的 12px 标签行），避免顶部空行。
+        if (!title.trim()) return html.replace(/<p style="[^"]*font-size:12px[^"]*"><\/p>/, "");
+        return html;
+      }
+      case "quoteCard":
+        return component(context, "quoteCard", { children: renderBlocks(node.children, context) });
       case "unorderedList":
       case "orderedList": {
         const children = node.items.map(item => component(context, "listItem", {

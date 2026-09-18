@@ -12,6 +12,8 @@ export type ThemeMarkdownNode =
   | { kind: HeadingKind; inline: InlineNode[]; sourceText: string }
   | { kind: "paragraph"; inline: InlineNode[]; sourceText: string }
   | { kind: "blockquote"; children: ThemeMarkdownNode[] }
+  | { kind: "calloutNote" | "calloutTip" | "calloutWarning"; title: string; children: ThemeMarkdownNode[] }
+  | { kind: "quoteCard"; children: ThemeMarkdownNode[] }
   | { kind: "unorderedList" | "orderedList"; items: ThemeMarkdownNode[][] }
   | { kind: "codeBlock"; language: string; value: string }
   | { kind: "image"; source: string; alt: string }
@@ -261,7 +263,7 @@ function parseBlocks(lines: string[]): ThemeMarkdownNode[] {
         quoteLines.push(quote[1]);
         index += 1;
       }
-      nodes.push({ kind: "blockquote", children: parseBlocks(quoteLines) });
+      nodes.push(parseQuoteBlock(quoteLines));
       continue;
     }
 
@@ -299,6 +301,28 @@ function parseBlocks(lines: string[]): ThemeMarkdownNode[] {
     nodes.push(...parseParagraphWithImages(sourceText));
   }
   return nodes;
+}
+
+function parseQuoteBlock(quoteLines: string[]): ThemeMarkdownNode {
+  const header = quoteLines[0]?.match(/^\[!([a-zA-Z]+)\]\s*(.*)$/) ?? null;
+  const calloutKinds: Record<string, "calloutNote" | "calloutTip" | "calloutWarning"> = {
+    note: "calloutNote",
+    tip: "calloutTip",
+    warning: "calloutWarning",
+  };
+  if (header) {
+    const [, type, rest] = header;
+    const calloutKind = calloutKinds[type.toLowerCase()];
+    if (calloutKind) {
+      const body = quoteLines.slice(1);
+      return { kind: calloutKind, title: rest.trim(), children: parseBlocks(body.length ? body : [""]) };
+    }
+    if (type.toLowerCase() === "quote") {
+      const body = rest.trim() ? [rest.trim(), ...quoteLines.slice(1)] : quoteLines.slice(1);
+      return { kind: "quoteCard", children: parseBlocks(body.length ? body : [""]) };
+    }
+  }
+  return { kind: "blockquote", children: parseBlocks(quoteLines) };
 }
 
 export function parseThemeMarkdown(markdown: string): ThemeMarkdownNode[] {

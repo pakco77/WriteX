@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 import * as skillsModule from "../src/skills.ts";
 
@@ -195,6 +195,133 @@ test("invalid frontmatter is skipped and files over 128 KiB are never read", asy
   assert.equal(reads.some(path => path.endsWith("/oversized/SKILL.md")), false);
   assert.equal(skills[0]?.source.includes("description: usable"), true);
   assert.match(skills[0]?.sourceHash ?? "", /^[a-f0-9]{64}$/);
+});
+
+test("the install env puts the resolved npx's own node directory first on PATH", async t => {
+  const bin = await mkdtemp(join(tmpdir(), "writex-skill-bin-"));
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  const nodeBinary = join(bin, "node");
+  await writeFile(nodeBinary, "#!/bin/sh\nexit 0\n");
+  await chmod(nodeBinary, 0o755);
+  const npxBinary = join(bin, "npx");
+  await writeFile(npxBinary, "#!/bin/sh\nexit 0\n");
+  await chmod(npxBinary, 0o755);
+
+  const env = skillsModule.buildSkillInstallEnv(npxBinary, { PATH: "/usr/bin:/bin" });
+
+  const parts = (env.PATH ?? "").split(delimiter).filter(Boolean);
+  assert.equal(parts[0], await realpath(bin));
+  assert.equal(env.DO_NOT_TRACK, "1");
+  assert.equal(env.DISABLE_TELEMETRY, "1");
+});
+
+test("the install env follows npx symlinks to the directory that owns node", async t => {
+  const bin = await mkdtemp(join(tmpdir(), "writex-skill-bin-"));
+  const shimDir = await mkdtemp(join(tmpdir(), "writex-skill-shim-"));
+  t.after(() => Promise.all([
+    rm(bin, { recursive: true, force: true }),
+    rm(shimDir, { recursive: true, force: true }),
+  ]));
+  const nodeBinary = join(bin, "node");
+  await writeFile(nodeBinary, "#!/bin/sh\nexit 0\n");
+  await chmod(nodeBinary, 0o755);
+  const npxBinary = join(bin, "npx");
+  await writeFile(npxBinary, "#!/bin/sh\nexit 0\n");
+  await chmod(npxBinary, 0o755);
+  const shim = join(shimDir, "npx");
+  if (!await symlinkDirectory(t, npxBinary, shim)) return;
+
+  const env = skillsModule.buildSkillInstallEnv(shim, { PATH: "/usr/bin:/bin" });
+
+  assert.equal((env.PATH ?? "").split(delimiter).filter(Boolean)[0], await realpath(bin));
+});
+
+test("the install env walks nested npm layouts to the directory that owns node", async t => {
+  const runtimeRoot = await mkdtemp(join(tmpdir(), "writex-skill-runtime-"));
+  t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+  const binDir = join(runtimeRoot, "bin");
+  await mkdir(binDir, { recursive: true });
+  const nodeBinary = join(binDir, "node");
+  await writeFile(nodeBinary, "#!/bin/sh\nexit 0\n");
+  await chmod(nodeBinary, 0o755);
+  const cliDir = join(runtimeRoot, "lib", "node_modules", "npm", "bin");
+  await mkdir(cliDir, { recursive: true });
+  const cli = join(cliDir, "npx-cli.js");
+  await writeFile(cli, "// npx cli\n");
+  const shim = join(binDir, "npx");
+  if (!await symlinkDirectory(t, cli, shim)) return;
+
+  const env = skillsModule.buildSkillInstallEnv(shim, { PATH: "/usr/bin:/bin" });
+
+  assert.equal((env.PATH ?? "").split(delimiter).filter(Boolean)[0], await realpath(binDir));
+});
+
+test("the install env leaves PATH untouched when the npx directory has no node", async t => {
+  const orphanDir = await mkdtemp(join(tmpdir(), "writex-skill-orphan-"));
+  t.after(() => rm(orphanDir, { recursive: true, force: true }));
+  const npxBinary = join(orphanDir, "npx");
+  await writeFile(npxBinary, "#!/bin/sh\nexit 0\n");
+  await chmod(npxBinary, 0o755);
+
+  const env = skillsModule.buildSkillInstallEnv(npxBinary, { PATH: "/usr/bin:/bin" });
+
+  assert.equal(env.PATH, "/usr/bin:/bin");
+});
+
+test("the install env prepends the npx directory only once", async t => {
+  const bin = await mkdtemp(join(tmpdir(), "writex-skill-bin-"));
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  const nodeBinary = join(bin, "node");
+  await writeFile(nodeBinary, "#!/bin/sh\nexit 0\n");
+  await chmod(nodeBinary, 0o755);
+  const npxBinary = join(bin, "npx");
+  await writeFile(npxBinary, "#!/bin/sh\nexit 0\n");
+  await chmod(npxBinary, 0o755);
+
+  const first = skillsModule.buildSkillInstallEnv(npxBinary, { PATH: "/usr/bin:/bin" });
+  const second = skillsModule.buildSkillInstallEnv(npxBinary, first);
+
+  const realBin = await realpath(bin);
+  const parts = (second.PATH ?? "").split(delimiter).filter(Boolean);
+  assert.deepEqual(parts.filter(part => part === realBin), [realBin]);
+});
+
+test("findNewlyInstalledSkill identifies exactly one added Skill", () => {
+  const before = [
+    { skillFile: "/vault/.agents/skills/a/SKILL.md", aliases: [] },
+    { skillFile: "/vault/.agents/skills/b/SKILL.md", aliases: [] },
+  ] as unknown as skillsModule.LocalSkill[];
+  const after = [
+    ...before,
+    { skillFile: "/vault/.agents/skills/new/SKILL.md", aliases: [] },
+  ] as unknown as skillsModule.LocalSkill[];
+
+  const found = skillsModule.findNewlyInstalledSkill(before, after);
+
+  assert.equal(found?.skillFile, "/vault/.agents/skills/new/SKILL.md");
+});
+
+test("findNewlyInstalledSkill returns undefined for none or multiple additions", () => {
+  const noneBefore = [{ skillFile: "/a/SKILL.md", aliases: [] }] as unknown as skillsModule.LocalSkill[];
+  assert.equal(skillsModule.findNewlyInstalledSkill(noneBefore, noneBefore), undefined);
+
+  const multiAfter = [
+    ...noneBefore,
+    { skillFile: "/b/SKILL.md", aliases: [] },
+    { skillFile: "/c/SKILL.md", aliases: [] },
+  ] as unknown as skillsModule.LocalSkill[];
+  assert.equal(skillsModule.findNewlyInstalledSkill(noneBefore, multiAfter), undefined);
+});
+
+test("findNewlyInstalledSkill treats alias-only changes as no new Skill", () => {
+  const before = [
+    { skillFile: "/real/SKILL.md", aliases: ["/alias/SKILL.md"] },
+  ] as unknown as skillsModule.LocalSkill[];
+  const after = [
+    { skillFile: "/real/SKILL.md", aliases: ["/alias/SKILL.md", "/another/SKILL.md"] },
+  ] as unknown as skillsModule.LocalSkill[];
+
+  assert.equal(skillsModule.findNewlyInstalledSkill(before, after), undefined);
 });
 
 test("an existing but invalid active Skill is distinguishable from a missing file", async t => {

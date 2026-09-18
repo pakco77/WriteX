@@ -10,7 +10,15 @@ export type ThemeNodeKind =
   | "unorderedList" | "orderedList" | "listItem"
   | "link" | "image" | "imageCaption"
   | "inlineCode" | "codeBlock" | "horizontalRule"
-  | "table" | "tableHead" | "tableBody" | "tableRow" | "tableHeaderCell" | "tableCell";
+  | "table" | "tableHead" | "tableBody" | "tableRow" | "tableHeaderCell" | "tableCell"
+  | "calloutNote" | "calloutTip" | "calloutWarning" | "quoteCard";
+
+export interface ThemePalette {
+  id: string;
+  name: string;
+  /** 覆盖 tokens 的子集；未覆盖的 token 沿用主题默认值。 */
+  tokens: Record<string, string>;
+}
 
 export interface WriteXThemePackage {
   schemaVersion: 1;
@@ -25,6 +33,7 @@ export interface WriteXThemePackage {
     minWriteXVersion: string;
   };
   tokens: Record<string, string>;
+  palettes?: ThemePalette[];
   components: Record<string, { template: string }>;
   mapping: Partial<Record<ThemeNodeKind, string>>;
 }
@@ -40,7 +49,7 @@ const THEME_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{1,79}$/;
 const COMPONENT_ID_PATTERN = /^[a-z][a-zA-Z0-9._-]{0,79}$/;
 const VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 const ALLOWED_PLACEHOLDERS = new Set([
-  "content", "children", "summary", "index", "language", "src", "alt", "caption",
+  "content", "children", "summary", "index", "language", "src", "alt", "caption", "title",
 ]);
 const THEME_NODE_KINDS = new Set<ThemeNodeKind>([
   "document", "articleHeader", "paragraph",
@@ -50,7 +59,12 @@ const THEME_NODE_KINDS = new Set<ThemeNodeKind>([
   "link", "image", "imageCaption",
   "inlineCode", "codeBlock", "horizontalRule",
   "table", "tableHead", "tableBody", "tableRow", "tableHeaderCell", "tableCell",
+  "calloutNote", "calloutTip", "calloutWarning", "quoteCard",
 ]);
+const TOKEN_PLACEHOLDER = /^{{tokens\.[a-zA-Z][a-zA-Z0-9._-]{0,63}}}$/;
+export function isThemeTokenPlaceholder(value: string): boolean {
+  return TOKEN_PLACEHOLDER.test(value.trim());
+}
 export const THEME_ALLOWED_TAGS = [
   "section", "p", "span", "strong", "em", "a", "img",
   "h1", "h2", "h3", "h4", "h5", "h6",
@@ -131,7 +145,9 @@ function validateTextPlaceholders(text: string, componentName: string, errors: s
 }
 
 function validateCss(value: string, componentName: string, errors: string[]): void {
-  if (/[{}@\\]/.test(value) || /(?:url|expression|var)\s*\(/i.test(value)) {
+  // tokens 占位符在 CSS 校验前替换为安全色值；注入本身由渲染器完成。
+  const normalized = value.replace(/{{tokens\.[a-zA-Z][a-zA-Z0-9._-]{0,63}}}/g, "#000");
+  if (/[{}@\\]/.test(normalized) || /(?:url|expression|var)\s*\(/i.test(normalized)) {
     errors.push(`component ${componentName} 包含不安全的 CSS`);
     return;
   }
@@ -206,7 +222,11 @@ function validateAttribute(
       if (value !== "{{alt}}") errors.push(`component ${componentName} 的 alt 必须完整使用 {{alt}}`);
     }
   } else if (attribute !== "src" && attribute !== "href" && (value.includes("{{") || value.includes("}}"))) {
-    errors.push(`component ${componentName} 不允许在 ${attribute} 中使用占位符`);
+    // tokens 占位符允许出现在 style 中（由渲染器注入主题色值），其余属性禁用占位符。
+    const withoutTokens = value.replace(/{{tokens\.[a-zA-Z][a-zA-Z0-9._-]{0,63}}}/g, "");
+    if (withoutTokens.includes("{{") || withoutTokens.includes("}}") || attribute !== "style") {
+      errors.push(`component ${componentName} 不允许在 ${attribute} 中使用占位符`);
+    }
   }
 }
 
@@ -326,6 +346,28 @@ export function validateThemePackage(input: unknown): ThemeValidationResult {
     }
   }
 
+  if (input.palettes !== undefined) {
+    if (!Array.isArray(input.palettes)) {
+      errors.push("palettes 必须是数组");
+    } else {
+      const paletteIds = new Set<string>();
+      for (const palette of input.palettes) {
+        if (!isPlainObject(palette) || typeof palette.id !== "string" || !COMPONENT_ID_PATTERN.test(palette.id)
+          || typeof palette.name !== "string" || !palette.name.trim() || !isPlainObject(palette.tokens)) {
+          errors.push("palette 必须包含 id、name 与 tokens");
+          continue;
+        }
+        if (paletteIds.has(palette.id)) errors.push(`palette ${palette.id} 重复`);
+        paletteIds.add(palette.id);
+        for (const [name, value] of Object.entries(palette.tokens)) {
+          if (!COMPONENT_ID_PATTERN.test(name) || typeof value !== "string" || value.length > 4096) {
+            errors.push(`palette ${palette.id} 的 token ${name} 无效`);
+          }
+        }
+      }
+    }
+  }
+
   const componentNames = new Set<string>();
   if (isPlainObject(input.components)) {
     const components = Object.entries(input.components);
@@ -340,7 +382,8 @@ export function validateThemePackage(input: unknown): ThemeValidationResult {
         errors.push(`component ${name} 嵌套不得超过 20 层`);
       }
       for (const placeholder of value.template.matchAll(/{{([^{}]+)}}/g)) {
-        if (!ALLOWED_PLACEHOLDERS.has(placeholder[1].trim())) {
+        const placeholderName = placeholder[1].trim();
+        if (!ALLOWED_PLACEHOLDERS.has(placeholderName) && !isThemeTokenPlaceholder(`{{${placeholderName}}}`)) {
           errors.push(`component ${name} 包含未知占位符 {{${placeholder[1]}}}`);
         }
       }

@@ -1,7 +1,7 @@
 import type { ThemeAvailabilityStatus, ThemeListItem } from "./themeService.ts";
 
 export type ThemeLibraryFilter = "all" | "installed" | "available" | "update" | "failed";
-export type ThemeLibraryAction = "install" | "retry" | "cancel" | "select" | "export" | "duplicate" | "rename" | "delete";
+export type ThemeLibraryAction = "install" | "retry" | "cancel" | "select" | "export" | "duplicate" | "rename" | "delete" | "guide";
 
 export interface ThemeLibraryRow extends Pick<ThemeListItem,
   "id" | "name" | "version" | "author" | "license" | "sourceUrl" | "status" | "sourceType" | "error" | "task"
@@ -26,9 +26,9 @@ export function themeActions(item: ThemeLibraryRow, currentId: string): ThemeLib
   if (item.status === "installing") return ["cancel"];
   if (item.status === "available") return ["install"];
   if (item.status === "failed" || item.status === "waiting") return ["retry"];
-  if (item.status === "update") return ["select", "install", "export", "duplicate"];
+  if (item.status === "update") return ["select", "install", "guide", "export", "duplicate"];
 
-  const actions: ThemeLibraryAction[] = [];
+  const actions: ThemeLibraryAction[] = ["guide"];
   if (item.id !== currentId) actions.push("select");
   actions.push("export", "duplicate");
   if (item.sourceType === "import" || item.sourceType === "compiled") {

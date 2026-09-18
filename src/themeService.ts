@@ -5,9 +5,10 @@ import { ThemeInstaller, type ThemeInstallTask } from "./themeInstaller.ts";
 import { extractThemeFrontmatter, parseThemeMarkdown, type ThemeMarkdownNode } from "./themeMarkdown.ts";
 import {
   renderParsedTheme,
+  resolveThemePalette,
   type ThemeRenderResult,
 } from "./themeRenderer.ts";
-import type { WriteXThemePackage } from "./themeSchema.ts";
+import type { ThemePalette, WriteXThemePackage } from "./themeSchema.ts";
 import {
   ThemeStore,
   type InstallMetadata,
@@ -36,6 +37,10 @@ export interface ThemeServiceOptions {
   installer: ThemeInstaller;
   catalog: readonly ThemeCatalogEntry[];
   parseMarkdown?: (markdown: string) => ThemeMarkdownNode[];
+  palettePreferences?: {
+    get(themeId: string): string | undefined;
+    set(themeId: string, paletteId: string | null): void;
+  };
 }
 
 interface LoadedTheme {
@@ -73,6 +78,7 @@ export class ThemeService {
   private readonly catalog: readonly ThemeCatalogEntry[];
   private readonly catalogById: Map<string, ThemeCatalogEntry>;
   private readonly parseMarkdown: (markdown: string) => ThemeMarkdownNode[];
+  private readonly palettePreferences?: ThemeServiceOptions["palettePreferences"];
   private readonly loaded = new Map<string, LoadedTheme>();
   private readonly unavailable = new Map<string, string>();
   private readonly parseCache = new Map<string, ThemeMarkdownNode[]>();
@@ -85,6 +91,7 @@ export class ThemeService {
     this.catalog = options.catalog;
     this.catalogById = new Map(options.catalog.map(entry => [entry.id, entry]));
     this.parseMarkdown = options.parseMarkdown ?? parseThemeMarkdown;
+    this.palettePreferences = options.palettePreferences;
     this.installer.subscribe(() => this.notify());
   }
 
@@ -138,8 +145,34 @@ export class ThemeService {
 
   getTheme(id: string): WriteXThemePackage {
     const loaded = this.loaded.get(id);
-    if (loaded) return loaded.theme;
+    if (loaded) return resolveThemePalette(loaded.theme, this.palettePreferences?.get(id));
     throw new ThemeUnavailableError(id, this.unavailable.get(id));
+  }
+
+  listPalettes(id: string): ThemePalette[] {
+    const loaded = this.loaded.get(id);
+    if (!loaded) return [];
+    const palettes = loaded.theme.palettes;
+    return palettes ? [...palettes] : [];
+  }
+
+  getPaletteId(id: string): string | undefined {
+    const preference = this.palettePreferences?.get(id);
+    if (!preference) return undefined;
+    const loaded = this.loaded.get(id);
+    if (!loaded?.theme.palettes?.some(palette => palette.id === preference)) return undefined;
+    return preference;
+  }
+
+  setPalette(id: string, paletteId: string | null): void {
+    if (paletteId) {
+      const loaded = this.loaded.get(id);
+      if (!loaded?.theme.palettes?.some(palette => palette.id === paletteId)) {
+        throw new ThemeUnavailableError(id, `色板 ${paletteId} 不存在`);
+      }
+    }
+    this.palettePreferences?.set(id, paletteId);
+    this.notify();
   }
 
   render(
@@ -149,6 +182,7 @@ export class ThemeService {
   ): ThemeServiceRenderResult {
     const loaded = this.loaded.get(id);
     if (!loaded) throw new ThemeUnavailableError(id, this.unavailable.get(id));
+    const theme = resolveThemePalette(loaded.theme, this.palettePreferences?.get(id));
     const contentHash = hashBytes(markdown);
     let nodes = this.parseCache.get(contentHash);
     if (!nodes) {
@@ -159,10 +193,10 @@ export class ThemeService {
       this.parseCache.delete(contentHash);
       this.parseCache.set(contentHash, nodes);
     }
-    const result = renderParsedTheme(nodes, loaded.theme, resolveImage, extractThemeFrontmatter(markdown));
+    const result = renderParsedTheme(nodes, theme, resolveImage, extractThemeFrontmatter(markdown));
     return {
       ...result,
-      themeName: loaded.theme.manifest.name,
+      themeName: theme.manifest.name,
       themeHash: loaded.hash,
     };
   }

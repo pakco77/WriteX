@@ -210,3 +210,58 @@ test("import updates refresh theme bytes and corrupt installed themes stay unava
     assert.throws(() => restarted.getTheme("pakco.custom"), /哈希|不可用/);
   });
 });
+
+test("palette preference resolves themes in getTheme and render, and unknown ids stay default", async () => {
+  await withRoot(async root => {
+    const themed = structuredClone(BUILTIN_THEMES.default) as WriteXThemePackage;
+    themed.manifest.id = "pakco.paletted";
+    themed.manifest.name = "色板主题";
+    themed.tokens = { accent: "#111111" };
+    themed.components.heading1 = { template: '<h1 style="color:{{tokens.accent}}">{{content}}</h1>' };
+    themed.palettes = [
+      { id: "warm", name: "暖橙", tokens: { accent: "#EA580C" } },
+      { id: "mist", name: "雾蓝", tokens: { accent: "#0284C7" } },
+    ];
+    const bytes = new TextEncoder().encode(`${JSON.stringify(themed, null, 2)}\n`);
+    const catalog = [...builtinCatalog, downloadEntry("pakco.paletted", bytes)];
+    const store = new ThemeStore(root);
+    const installer = new ThemeInstaller(store, catalog, async () => bytes);
+    const prefs: Record<string, string> = {};
+    const service = new ThemeService({
+      store,
+      installer,
+      catalog,
+      palettePreferences: {
+        get: themeId => prefs[themeId],
+        set: (themeId, paletteId) => {
+          if (paletteId) prefs[themeId] = paletteId;
+          else delete prefs[themeId];
+        },
+      },
+    });
+    await service.initialize();
+    await service.install("pakco.paletted");
+
+    assert.deepEqual(service.listPalettes("pakco.paletted").map(palette => palette.id), ["warm", "mist"]);
+    assert.equal(service.getPaletteId("pakco.paletted"), undefined);
+    assert.match(service.getTheme("pakco.paletted").components.heading1.template, /\{\{tokens\.accent\}\}/);
+    assert.match(service.render("# 标题", "pakco.paletted").html, /#111111/);
+
+    service.setPalette("pakco.paletted", "warm");
+    assert.equal(prefs["pakco.paletted"], "warm");
+    assert.equal(service.getPaletteId("pakco.paletted"), "warm");
+    assert.equal(service.getTheme("pakco.paletted").tokens.accent, "#EA580C");
+    assert.doesNotMatch(service.render("# 标题", "pakco.paletted").html, /#111111/);
+    assert.match(service.render("# 标题", "pakco.paletted").html, /#EA580C/);
+
+    service.setPalette("pakco.paletted", null);
+    assert.equal(service.getPaletteId("pakco.paletted"), undefined);
+    assert.match(service.render("# 标题", "pakco.paletted").html, /#111111/);
+
+    assert.throws(() => service.setPalette("pakco.paletted", "missing"), ThemeUnavailableError);
+    prefs["pakco.paletted"] = "gone";
+    assert.equal(service.getPaletteId("pakco.paletted"), undefined);
+    assert.match(service.render("# 标题", "pakco.paletted").html, /#111111/);
+    assert.deepEqual(service.listPalettes("missing"), []);
+  });
+});

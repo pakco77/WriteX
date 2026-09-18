@@ -43,12 +43,13 @@ test("theme library status filters separate installed available update and faile
 });
 
 test("theme actions respect built-in downloaded custom and current-theme boundaries", () => {
-  assert.deepEqual(themeActions(row({ id: "default", status: "builtin", sourceType: "builtin" }), "default"), ["export", "duplicate"]);
-  assert.deepEqual(themeActions(row({ id: "remote", status: "installed", sourceType: "download" }), "remote"), ["export", "duplicate"]);
-  assert.deepEqual(themeActions(row({ id: "remote", status: "installed", sourceType: "download" }), "default"), ["select", "export", "duplicate"]);
-  assert.deepEqual(themeActions(row({ id: "custom", status: "installed", sourceType: "import" }), "default"), ["select", "export", "duplicate", "rename", "delete"]);
-  assert.deepEqual(themeActions(row({ id: "compiled", status: "installed", sourceType: "compiled" }), "compiled"), ["export", "duplicate", "rename"]);
+  assert.deepEqual(themeActions(row({ id: "default", status: "builtin", sourceType: "builtin" }), "default"), ["guide", "export", "duplicate"]);
+  assert.deepEqual(themeActions(row({ id: "remote", status: "installed", sourceType: "download" }), "remote"), ["guide", "export", "duplicate"]);
+  assert.deepEqual(themeActions(row({ id: "remote", status: "installed", sourceType: "download" }), "default"), ["guide", "select", "export", "duplicate"]);
+  assert.deepEqual(themeActions(row({ id: "custom", status: "installed", sourceType: "import" }), "default"), ["guide", "select", "export", "duplicate", "rename", "delete"]);
+  assert.deepEqual(themeActions(row({ id: "compiled", status: "installed", sourceType: "compiled" }), "compiled"), ["guide", "export", "duplicate", "rename"]);
   assert.deepEqual(themeActions(row({ id: "new", status: "available" }), "default"), ["install"]);
   assert.deepEqual(themeActions(row({ id: "broken", status: "failed" }), "default"), ["retry"]);
   assert.deepEqual(themeActions(row({ id: "busy", status: "installing" }), "default"), ["cancel"]);
+  assert.deepEqual(themeActions(row({ id: "remote", status: "update", sourceType: "download" }), "remote"), ["select", "install", "guide", "export", "duplicate"]);
 });

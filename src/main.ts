@@ -146,7 +146,21 @@ export default class ObsidianAgentPlugin extends Plugin {
       if (response.status < 200 || response.status >= 300) throw new Error(`下载排版失败：HTTP ${response.status}`);
       return new Uint8Array(response.arrayBuffer);
     });
-    this.themeService = new ThemeService({ store: themeStore, installer: themeInstaller, catalog: THEME_CATALOG });
+    this.themeService = new ThemeService({
+      store: themeStore,
+      installer: themeInstaller,
+      catalog: THEME_CATALOG,
+      palettePreferences: {
+        get: themeId => this.data.themePalettes?.[themeId],
+        set: (themeId, paletteId) => {
+          const next = { ...(this.data.themePalettes ?? {}) };
+          if (paletteId) next[themeId] = paletteId;
+          else delete next[themeId];
+          this.data.themePalettes = next;
+          void this.persist();
+        },
+      },
+    });
     await this.themeService.initialize();
     this.themeService.bootstrapStarterThemes();
     this.registerView(VIEW_TYPE, leaf => new AgentView(leaf, this));

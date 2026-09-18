@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
+import { accessSync, realpathSync } from "node:fs";
 import { access, lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export interface LocalSkill {
   id: string;
@@ -392,6 +393,21 @@ export function findLocalSkillByPath(skills: LocalSkill[], path: string | undefi
   return skills.find(skill => skill.skillFile === path || skill.aliases.includes(path));
 }
 
+/**
+ * 安装完成后对比刷新前后的 Skill 列表：只有恰好新增一个 Skill 时才返回它，
+ * 供调用方直接启用；零个或多个时不猜测，返回 undefined。
+ */
+export function findNewlyInstalledSkill(before: LocalSkill[], after: LocalSkill[]): LocalSkill | undefined {
+  const known = new Set<string>();
+  for (const skill of before) {
+    known.add(skill.skillFile);
+    for (const alias of skill.aliases) known.add(alias);
+  }
+  const added = after.filter(skill => !known.has(skill.skillFile)
+    && !skill.aliases.some(alias => known.has(alias)));
+  return added.length === 1 ? added[0] : undefined;
+}
+
 export function isCurrentSkillScan(
   requestId: number,
   notePath: string,
@@ -448,13 +464,61 @@ async function resolveNpx(): Promise<string> {
   return "npx";
 }
 
+function directoryHasFile(directory: string, name: string): boolean {
+  try {
+    accessSync(join(directory, name));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * npx 可能是多层软链（如 ~/.local/bin/npx → …/npm/bin/npx-cli.js），node 可执行
+ * 文件不一定与 npx 真实路径同目录。从 npx 真实目录向上找最近一层包含 node 的
+ * 目录（兼容 node 直接位于该目录或该目录的 bin/ 子目录两种布局）。
+ */
+function findNodeDirectory(startDirectory: string): string | null {
+  const nodeName = process.platform === "win32" ? "node.exe" : "node";
+  let directory = startDirectory;
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (directoryHasFile(directory, nodeName)) return directory;
+    if (directoryHasFile(join(directory, "bin"), nodeName)) return join(directory, "bin");
+    const parent = dirname(directory);
+    if (parent === directory) break;
+    directory = parent;
+  }
+  return null;
+}
+
+/**
+ * GUI 应用（如 Obsidian）的 PATH 通常只有 /usr/bin:/bin，而 npx shim 依赖
+ * `#!/usr/bin/env node` 找 node。解析 npx 真实路径后，把提供 node 的目录放到
+ * PATH 最前，否则 spawn 会以 “env: node: No such file or directory” 失败。
+ */
+export function buildSkillInstallEnv(
+  binary: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...baseEnv, DO_NOT_TRACK: "1", DISABLE_TELEMETRY: "1" };
+  try {
+    const nodeDirectory = findNodeDirectory(dirname(realpathSync(binary)));
+    if (!nodeDirectory) return env;
+    const parts = (env.PATH ?? "").split(delimiter).filter(Boolean);
+    if (!parts.includes(nodeDirectory)) env.PATH = [nodeDirectory, ...parts].join(delimiter);
+  } catch {
+    // 解析失败时保持原 PATH，交给系统解析。
+  }
+  return env;
+}
+
 export async function installLocalSkill(source: string, vaultRoot: string): Promise<string> {
   const binary = await resolveNpx();
   const args = buildSkillInstallArgs(source);
   return new Promise((resolveInstall, reject) => {
     const child = spawn(binary, args, {
       cwd: vaultRoot,
-      env: { ...process.env, DO_NOT_TRACK: "1", DISABLE_TELEMETRY: "1" },
+      env: buildSkillInstallEnv(binary),
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,

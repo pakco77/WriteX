@@ -57,6 +57,7 @@ import { assetIdempotencyKey, characterCount, uploadFileName } from "./wechatSyn
 import {
   buildExplicitSkillInstruction,
   findLocalSkillByPath,
+  findNewlyInstalledSkill,
   isCurrentSkillScan,
   isSupportedSkillSource,
   type LocalSkill,
@@ -459,7 +460,6 @@ class SkillInstallModal extends Modal {
       this.render();
       try {
         await this.install(this.source);
-        new Notice("Skill 已安装到当前 Vault。");
         this.close();
       } catch (error) {
         this.busy = false;
@@ -2379,8 +2379,22 @@ export class AgentView extends ItemView {
       path => this.selectChatSkill(path),
       () => void this.refreshSkills(true),
       () => new SkillInstallModal(this.app, async source => {
+        const skillsBeforeInstall = this.localSkills;
         await this.plugin.installSkill(source);
         await this.refreshSkills(true);
+        const installed = findNewlyInstalledSkill(skillsBeforeInstall, this.localSkills);
+        if (installed) {
+          try {
+            await this.selectChatSkill(installed.skillFile);
+            new Notice(`已安装并启用 Skill：${installed.name}`);
+          } catch (error) {
+            new Notice(`Skill ${installed.name} 已安装，但启用失败：${errorMessage(error)}`);
+            this.openSkillPicker();
+          }
+        } else {
+          new Notice("Skill 已安装到当前 Vault。");
+          this.openSkillPicker();
+        }
       }).open(),
     ).open();
   }

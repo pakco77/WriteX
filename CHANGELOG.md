@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.2 - 2026-09-18
+
+- Install Vault Skills in Chat by pasting a GitHub repository URL; a single newly installed Skill is enabled automatically.
+- Fixed Skill installs failing under Obsidian's restricted GUI PATH by resolving the Node binary directory before spawning `npx`.
+- Added a per-theme usage guide in the theme library: each entry shows the Markdown syntax on the left and a real render from the current theme on the right.
+- Added callout syntax for theme rendering: `> [!note]`, `> [!tip]`, `> [!warning]`, and `> [!quote]` produce note, tip, warning, and quote-card blocks; warning callouts share one unified amber treatment across themes, and callouts without a title no longer leave a blank label line.
+- Tokenized all seven public themes (`{{tokens.*}}` placeholders with automatic derivation from template literals, render-byte-identical before and after) and added 2–3 official color palettes per theme with a palette dropdown in the theme library; the chosen palette persists per theme in plugin data.
+
 ## 0.6.1 - 2026-09-16
 
 - Updated all bundled public themes to their capacity-safe packages. For the representative 3,561-character, 108-paragraph, 12-image article, every theme now stays below the WeChat draft 20,000-code-point and 1 MiB limits.

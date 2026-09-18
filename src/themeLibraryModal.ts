@@ -18,6 +18,7 @@ import {
 import { renderTheme } from "./themeRenderer.ts";
 import type { ThemeService, ThemeListItem } from "./themeService.ts";
 import { validateThemePackage } from "./themeSchema.ts";
+import { renderThemeUsageGuide, type ThemeUsageGuideEntry } from "./themeUsageGuide.ts";
 
 const FILTERS: Array<{ id: ThemeLibraryFilter; label: string }> = [
   { id: "all", label: "全部" },
@@ -36,6 +37,7 @@ const ACTION_LABELS: Record<ThemeLibraryAction, string> = {
   duplicate: "复制",
   rename: "重命名",
   delete: "删除",
+  guide: "使用说明",
 };
 
 function errorMessage(error: unknown): string {
@@ -157,6 +159,40 @@ class ThemeCompilePreviewModal extends Modal {
   }
 }
 
+class ThemeUsageGuideModal extends Modal {
+  constructor(
+    app: App,
+    private readonly themeName: string,
+    private readonly entries: ThemeUsageGuideEntry[],
+  ) {
+    super(app);
+  }
+
+  override onOpen(): void {
+    this.modalEl.addClass("oa-theme-guide-modal");
+    this.setTitle(`使用说明 · ${this.themeName}`);
+    this.contentEl.createEl("p", {
+      cls: "oa-theme-guide-intro",
+      text: "左边是 Obsidian 正文里写的符号，右边是这篇排版下的真实效果。摘要条需要在文章最前面写 summary。",
+    });
+    const list = this.contentEl.createDiv({ cls: "oa-theme-guide-list" });
+    for (const entry of this.entries) {
+      const row = list.createDiv({ cls: "oa-theme-guide-row" });
+      const syntax = row.createDiv({ cls: "oa-theme-guide-syntax" });
+      syntax.createEl("strong", { text: entry.label });
+      const code = syntax.createEl("pre");
+      code.createEl("code", { text: entry.syntax });
+      const demo = row.createDiv({ cls: "oa-theme-guide-demo" });
+      if (entry.html) demo.appendChild(sanitizeHTMLToDom(entry.html));
+      else demo.createEl("p", { cls: "oa-theme-guide-missing", text: "该排版未提供此组件。" });
+    }
+  }
+
+  override onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
 export class ThemeLibraryModal extends Modal {
   private query = "";
   private filter: ThemeLibraryFilter = "all";
@@ -275,11 +311,39 @@ export class ThemeLibraryModal extends Modal {
       button.disabled = Boolean(this.busyAction);
       button.onclick = () => void this.runAction(action, item);
     }
+    const palettes = this.service.listPalettes(item.id);
+    if (palettes.length > 0) {
+      const paletteField = actions.createEl("label", { cls: "oa-theme-palette" });
+      paletteField.createEl("span", { text: "色板" });
+      const select = paletteField.createEl("select");
+      select.createEl("option", { text: "默认", value: "" });
+      const current = this.service.getPaletteId(item.id);
+      for (const palette of palettes) {
+        const option = select.createEl("option", { text: palette.name, value: palette.id });
+        option.selected = palette.id === current;
+      }
+      select.onchange = () => {
+        try {
+          this.service.setPalette(item.id, select.value || null);
+        } catch (error) {
+          new Notice(errorMessage(error));
+        }
+      };
+    }
   }
 
   private async runAction(action: ThemeLibraryAction, item: ThemeListItem): Promise<void> {
     if (action === "cancel") {
       this.service.cancelInstall(item.id);
+      return;
+    }
+    if (action === "guide") {
+      try {
+        const theme = this.service.getTheme(item.id);
+        new ThemeUsageGuideModal(this.app, item.name, renderThemeUsageGuide(theme)).open();
+      } catch (error) {
+        new Notice(errorMessage(error));
+      }
       return;
     }
     this.busyAction = `${item.id}:${action}`;
